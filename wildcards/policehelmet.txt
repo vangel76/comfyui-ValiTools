@@ -1,0 +1,2 @@
+{full-face|rounded|full|} clear visor helmet
+{anti-|full-face|tactical|NATO|} riot helmet {with clear visor|}
