@@ -17,11 +17,12 @@ LORA_PATTERN = re.compile(
 )
 
 # Variable syntax: '{a|b}==<name>' / '__file__==<name>' assigns, '<name>' references.
+# '==!<name>' is the silent variant: it assigns but emits nothing at the definition site.
 # Must stay in sync with the variable regexes in web/nodes/nodes.js.
-VARIABLE_ASSIGN_PATTERN = re.compile(r'\s*==\s*<([A-Za-z0-9_]+)>')  # used with .match() right after a combination
+VARIABLE_ASSIGN_PATTERN = re.compile(r'\s*==\s*(!)?<([A-Za-z0-9_]+)>')  # used with .match() right after a combination
 VARIABLE_REF_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>')
 # 'word==<name>' on fully resolved text: captures the single word right before '=='
-LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*<([A-Za-z0-9_]+)>')
+LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)>')
 
 DEFAULT_PROMPT = r"""### Instructions and Tips
 
@@ -63,11 +64,14 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 # Plain text works too: 'fore-head==<part>' stores the single word (no spaces) right before '=='.
 # That also works inside combination branches - only the SELECTED branch's assignment happens: her {face==<part>|fore-head==<part>|head==<part>}
 # For a fixed MULTI-WORD text use a single-choice combination: {crime scene}==<loc>
+# SILENT assignment: '==!<name>' stores the value but outputs NOTHING where it stands - only the <name> references output it.
 # TIP: typing '<' opens a dropdown with all assigned variables - type to filter, UP/DOWN + ENTER/TAB or click to insert, ESC to close.
 
     {blonde|ginger}==<haircolor> hair            # picks one AND remembers the pick
     her {light <haircolor>|dark <haircolor>} eyebrows match her <haircolor> hair
     __names__==<girlname> enters. Say hi to <girlname>!
+    {sunny|rainy|foggy}==!<weather>              # rolls + remembers, outputs nothing here
+    the <weather> morning turns into a <weather> afternoon
 
 ## Word weightning
 # This is already natively supported by ComfyUI - in case you didn't know, it reinforces the importance of the encased words.
@@ -440,9 +444,11 @@ def dynamic_prompts(
         last_index = 0
 
         for match in VARIABLE_REF_PATTERN.finditer(text):
-            tail = text[max(0, match.start() - 32):match.start()]
-            if tail.rstrip().endswith("=="):
-                continue  # '<name>' belongs to a pending 'word==<name>' assignment
+            tail = text[max(0, match.start() - 32):match.start()].rstrip()
+            if tail.endswith("!"):
+                tail = tail[:-1].rstrip()
+            if tail.endswith("=="):
+                continue  # '<name>' belongs to a pending 'word==<name>' / 'word==!<name>' assignment
 
             value = variables.get(match.group(1).lower())
             if value is None:
@@ -491,13 +497,16 @@ def dynamic_prompts(
             if "__" in word:
                 continue  # unresolved wildcard assignment stays fully literal
 
-            variables[match.group(2).lower()] = word
-            word_end = match.end(1)  # keep the word, drop the '==<name>' suffix
-            result_parts.append(text[last_index:word_end])
+            variables[match.group(3).lower()] = word
+            if match.group(2) is None:
+                keep_end = match.end(1)  # keep the word, drop the '==<name>' suffix
+            else:
+                keep_end = match.start()  # 'word==!<name>': silent - the whole assignment vanishes
+            result_parts.append(text[last_index:keep_end])
             if result_source_map is not None:
-                result_source_map.extend(text_source_map[last_index:word_end])
+                result_source_map.extend(text_source_map[last_index:keep_end])
             if result_wildcard_map is not None:
-                result_wildcard_map.extend(text_wildcard_map[last_index:word_end])
+                result_wildcard_map.extend(text_wildcard_map[last_index:keep_end])
             last_index = match.end()
 
         result_parts.append(text[last_index:])
@@ -717,12 +726,14 @@ def dynamic_prompts(
         # Seed the random number generator for wildcard selection
         random.seed(seed)
         
-        # Regex to find '__something__' or '__something.txt__', optionally with a '==<name>' variable assignment
-        pattern = re.compile(r'__(.+?)__(?:\s*==\s*<([A-Za-z0-9_]+)>)?')
+        # Regex to find '__something__' or '__something.txt__', optionally with a
+        # '==<name>' (or silent '==!<name>') variable assignment
+        pattern = re.compile(r'__(.+?)__(?:\s*==\s*(!)?<([A-Za-z0-9_]+)>)?')
 
         def replace_match(match):
             wildcard_name = match.group(1).strip()
-            variable_name = match.group(2)
+            silent_assign = match.group(2) is not None
+            variable_name = match.group(3)
     
             if wildcard_name.lower().endswith('.txt'):
                 wildcard_name = wildcard_name[:-4]
@@ -761,6 +772,8 @@ def dynamic_prompts(
                 if variable_name:
                     chosen = _resolve_fragment(chosen)
                     variables[variable_name.lower()] = chosen
+                    if silent_assign:
+                        chosen = ""
 
                 return chosen, True
 
@@ -983,13 +996,20 @@ def dynamic_prompts(
             if selected_choice_source_map is not None:
                 _append_selected_ranges(selected_choice_source_map)
 
-            # '{...}==<name>': fully resolve the picked choice, store it, and consume the suffix.
+            # '{...}==<name>': fully resolve the picked choice, store it, and consume the
+            # suffix. '{...}==!<name>' additionally emits nothing at the definition site.
             assignment = VARIABLE_ASSIGN_PATTERN.match(prompt, end)
             if assignment:
                 resolved_value = _resolve_fragment(selected_choice)
-                variables[assignment.group(1).lower()] = resolved_value
+                variables[assignment.group(2).lower()] = resolved_value
                 end = assignment.end()
-                if resolved_value != selected_choice:
+                if assignment.group(1) is not None:
+                    resolved_value = ""
+                    if prompt_source_map is not None:
+                        selected_choice_source_map = []
+                    if prompt_wildcard_map is not None:
+                        selected_choice_wildcard_map = []
+                elif resolved_value != selected_choice:
                     # Nested syntax resolved into generated text: it maps to no source
                     # characters (and loses the post-run selection marking).
                     if prompt_source_map is not None:

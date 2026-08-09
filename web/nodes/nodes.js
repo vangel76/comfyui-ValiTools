@@ -106,13 +106,14 @@ app.registerExtension({
 		const SILVER_TOKEN_NONCE = Math.random().toString(36).slice(2, 10);
 
 		// Variable syntax: '{a|b}==<name>' / '__file__==<name>' assigns, '<name>' references.
+		// '==!<name>' is the silent variant: assigns but emits nothing at the definition site.
 		// Must stay in sync with the variable regexes in nodes.py.
-		const VARIABLE_ASSIGN_SCAN_REGEX = /\S\s*==\s*<([A-Za-z0-9_]+)>/g;
-		const VARIABLE_ASSIGN_REGEX = /==\s*<([A-Za-z0-9_]+)>/g;
+		const VARIABLE_ASSIGN_SCAN_REGEX = /\S\s*==\s*!?<([A-Za-z0-9_]+)>/g;
+		const VARIABLE_ASSIGN_REGEX = /==\s*(!?)<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_REF_REGEX = /<([A-Za-z0-9_]+)>/g;
 		// Autocomplete: assignment with its source (for the dropdown preview), and the
 		// partial reference being typed directly before the cursor ('<', '<ha', ...).
-		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*<([A-Za-z0-9_]+)>/g;
+		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_PARTIAL_REGEX = /<([A-Za-z0-9_]*)$/;
 		const variableStyle = "color:#DA70D6; font-weight:bold;";
 
@@ -248,9 +249,11 @@ app.registerExtension({
 
 			// Variable assignments: ==<name> — valid after a combination, wildcard or plain
 			// word; only an '==<name>' with nothing before it is inert and shows red.
-			work = work.replace(VARIABLE_ASSIGN_REGEX, (match, name, offset, whole) => {
+			// Silent '==!<name>' assignments render dimmed + italic.
+			work = work.replace(VARIABLE_ASSIGN_REGEX, (match, bang, name, offset, whole) => {
 				const valid = /\S\s*$/.test(whole.substring(0, offset));
-				const style = valid ? variableStyle : "color:#FF4444; font-weight:bold;";
+				let style = valid ? variableStyle : "color:#FF4444; font-weight:bold;";
+				if (valid && bang) style += " opacity:0.6; font-style:italic;";
 				return protect(`<span style="${style}">${escapeHTML(match)}</span>`);
 			});
 

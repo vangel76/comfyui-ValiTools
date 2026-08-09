@@ -10,7 +10,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 
 - **Combinations**: `{a|b}` with optional `N::` weights, nested at will, per-level coloring
 - **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); CTRL+Click opens or creates the file
-- **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables
+- **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover
 - Outputs: `prompt` (resolved), `original_prompt`
@@ -38,6 +38,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.3.0
+  - VSmartPrompt: silent variable assignment `==!<name>` - assigns without emitting the value at the definition site; works on all three forms (`{a|b}==!<name>`, `__file__==!<name>`, `word==!<name>`); silent assignments render dimmed/italic in the editor
 - v1.2.1
   - VFileRandom: new `filename_noext` output (filename without extension)
 - v1.2.0
