@@ -1,7 +1,7 @@
 [project]
 name = "valitools"
 description = "ValiTools - a collection of ComfyUI nodes. Currently: VSmartPrompt, a Dynamic Prompts node with a rich-text editor, reusable variables and post-run selection highlighting."
-version = "1.3.0"
+version = "1.6.3"
 license = { file = "LICENSE" }
 
 [tool.comfy]

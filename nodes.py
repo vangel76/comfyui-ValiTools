@@ -1,6 +1,7 @@
 import os
 import re
 import random
+import hashlib
 from pathlib import Path
 
 from aiohttp import web
@@ -23,6 +24,10 @@ VARIABLE_ASSIGN_PATTERN = re.compile(r'\s*==\s*(!)?<([A-Za-z0-9_]+)>')  # used w
 VARIABLE_REF_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>')
 # 'word==<name>' on fully resolved text: captures the single word right before '=='
 LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)>')
+# Switcher guard: '<name>==value::' glued to a following '{...}' block or '__wildcard__'
+# gates it on the variable's value (case-insensitive). Must stay in sync with nodes.js.
+GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
+GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
 
 DEFAULT_PROMPT = r"""### Instructions and Tips
 
@@ -65,6 +70,7 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 # That also works inside combination branches - only the SELECTED branch's assignment happens: her {face==<part>|fore-head==<part>|head==<part>}
 # For a fixed MULTI-WORD text use a single-choice combination: {crime scene}==<loc>
 # SILENT assignment: '==!<name>' stores the value but outputs NOTHING where it stands - only the <name> references output it.
+# NODE INPUTS: text connected to the in1..in4 input sockets is available here as <in1>..<in4> - chain VSmartPrompt nodes by wiring one's output into another's socket.
 # TIP: typing '<' opens a dropdown with all assigned variables - type to filter, UP/DOWN + ENTER/TAB or click to insert, ESC to close.
 
     {blonde|ginger}==<haircolor> hair            # picks one AND remembers the pick
@@ -72,6 +78,17 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
     __names__==<girlname> enters. Say hi to <girlname>!
     {sunny|rainy|foggy}==!<weather>              # rolls + remembers, outputs nothing here
     the <weather> morning turns into a <weather> afternoon
+
+## SWITCHER (conditional blocks)
+
+# Gate a combination or wildcard on a variable's value: glue '<name>==value::' DIRECTLY in front of it.
+# Value matches (case-insensitive) -> it resolves normally. No match -> the whole thing outputs nothing.
+# Assign the tag BEFORE the switch. Silent branch tags are perfect for this:
+
+    she is {cutting the wedding cake cake==!<act>|holding a champagne glas glass==!<act>}.
+    <act>==cake::{she serves the cake|she cuts another slice}
+    <act>==glass::{she drops the glas|she takes a sip}
+    <act>==cake::__cake_actions__               # wildcards can be gated too
 
 ## Word weightning
 # This is already natively supported by ComfyUI - in case you didn't know, it reinforces the importance of the encased words.
@@ -174,9 +191,14 @@ def dynamic_prompts(
     remove_whitespaces: bool = True,
     remove_empty_tags: bool = True,
     wildcard_dir: str = WILDCARD_DIR,
-    return_trace: bool = False) -> str | tuple[str, list[list[int]], list[dict[str, str | int]]]:
+    return_trace: bool = False,
+    preset_variables: dict[str, str] | None = None) -> str | tuple[str, list[list[int]], list[dict[str, str | int]]]:
 
     wildcard_dir = normalize_wildcard_directory(wildcard_dir)
+    # ONE RNG stream for the whole run. Never reseed mid-run: reseeding per pass
+    # replays the same draw sequence and locks picks of different passes together
+    # (e.g. a nested wildcard's line pick was 100% correlated with its parent's).
+    rng = random.Random(seed)
     source_map = list(range(len(prompt))) if return_trace else None
     selected_ranges: list[list[int]] = []
     selected_range_keys: set[tuple[int, int]] = set()
@@ -184,9 +206,22 @@ def dynamic_prompts(
     wildcard_trace_lookup: dict[int, dict[str, str | int]] = {}
     wildcard_origin_map: list[int | None] | None = [None] * len(prompt) if return_trace else None
 
-    def _append_selected_ranges(choice_source_map: list[int | None] | None) -> None:
+    # Source indexes that count as "surviving" in the final filter pass even though
+    # their chars never reach the output text: empty-branch marks and variable
+    # references replaced by their value (the editor still shows those chars).
+    forced_source_indexes: set[int] = set()
+
+    def _append_selected_ranges(choice_source_map: list[int | None] | None, force: bool = False) -> None:
         if choice_source_map is None:
             return
+
+        if force:
+            forced_source_indexes.update(i for i in choice_source_map if i is not None)
+
+        def _add(key: tuple[int, int]) -> None:
+            if key not in selected_range_keys:
+                selected_range_keys.add(key)
+                selected_ranges.append([key[0], key[1]])
 
         current_start = None
         previous = None
@@ -194,10 +229,7 @@ def dynamic_prompts(
         for source_index in choice_source_map:
             if source_index is None:
                 if current_start is not None and previous is not None:
-                    key = (current_start, previous + 1)
-                    if key not in selected_range_keys:
-                        selected_range_keys.add(key)
-                        selected_ranges.append([key[0], key[1]])
+                    _add((current_start, previous + 1))
                 current_start = None
                 previous = None
                 continue
@@ -211,18 +243,12 @@ def dynamic_prompts(
                 previous = source_index
                 continue
 
-            key = (current_start, previous + 1)
-            if key not in selected_range_keys:
-                selected_range_keys.add(key)
-                selected_ranges.append([key[0], key[1]])
+            _add((current_start, previous + 1))
             current_start = source_index
             previous = source_index
 
         if current_start is not None and previous is not None:
-            key = (current_start, previous + 1)
-            if key not in selected_range_keys:
-                selected_range_keys.add(key)
-                selected_ranges.append([key[0], key[1]])
+            _add((current_start, previous + 1))
 
     def _split_lines_with_map(text: str, text_map: list[int | None] | None) -> tuple[list[str], list[list[int | None] | None]]:
         lines: list[str] = []
@@ -346,7 +372,7 @@ def dynamic_prompts(
         if prompt_source_map is None:
             return ranges
 
-        used_source_indexes = {index for index in prompt_source_map if index is not None}
+        used_source_indexes = {index for index in prompt_source_map if index is not None} | forced_source_indexes
         if not used_source_indexes:
             return []
 
@@ -425,7 +451,28 @@ def dynamic_prompts(
         return wildcard_resolutions
 
     # --- VARIABLES ({a|b}==<name> / __file__==<name> assigns, <name> references) ---
+    # Pre-seeded with the node's string input sockets (in1..in4) so upstream node
+    # outputs can be referenced in the text; inserted as-is, never re-resolved.
+    # A prompt-internal assignment to the same name overwrites (last assignment wins).
     variables: dict[str, str] = {}
+    if preset_variables:
+        variables.update({
+            str(name).lower(): str(value)
+            for name, value in preset_variables.items()
+            if value is not None
+        })
+
+    def _match_guard_before(text: str, construct_start: int) -> tuple[int, str, str] | None:
+        """Returns (guard_start, var_name, wanted_value) for a '<name>==value::' prefix
+        glued to the construct at construct_start, or None."""
+        slice_start = max(0, construct_start - 96)
+        gm = GUARD_BEFORE_PATTERN.search(text[slice_start:construct_start])
+        if not gm:
+            return None
+        return slice_start + gm.start(), gm.group(1).lower(), gm.group(2).strip().lower()
+
+    def _guard_is_true(var_name: str, wanted_value: str) -> bool:
+        return str(variables.get(var_name, "")).strip().lower() == wanted_value
 
     def _substitute_variables(
         text: str,
@@ -460,6 +507,9 @@ def dynamic_prompts(
             if result_source_map is not None:
                 result_source_map.extend(text_source_map[last_index:start])
                 result_source_map.extend([None] * len(value))
+                # The '<name>' chars leave the output but stay visible in the editor:
+                # keep any selection mark covering them (e.g. a '{<in1>|...}' branch).
+                forced_source_indexes.update(i for i in text_source_map[start:end] if i is not None)
             if result_wildcard_map is not None:
                 result_wildcard_map.extend(text_wildcard_map[last_index:start])
                 result_wildcard_map.extend([None] * len(value))
@@ -480,12 +530,16 @@ def dynamic_prompts(
         text: str,
         text_source_map: list[int | None] | None = None,
         text_wildcard_map: list[int | None] | None = None,
+        only_unbraced: bool = False,
     ) -> str | tuple[str, list[int | None] | None, list[int | None] | None]:
         """
         Handles 'word==<name>' on fully resolved text: stores the single word right
         before '==' and strips the assignment suffix, keeping the word in place.
         Runs after wildcard/combination resolution, so an assignment inside a
         combination branch only happens when that branch was selected.
+        With only_unbraced=True (used between resolution passes so switcher guards
+        can see branch-inner tags early) assignments still inside any '{...}' are
+        left alone - they belong to branches that may never be selected.
         """
         result_parts: list[str] = []
         result_source_map: list[int | None] | None = [] if text_source_map is not None else None
@@ -496,6 +550,8 @@ def dynamic_prompts(
             word = match.group(1)
             if "__" in word:
                 continue  # unresolved wildcard assignment stays fully literal
+            if only_unbraced and (text.count("{", 0, match.start()) - text.count("}", 0, match.start())) > 0:
+                continue  # inside an unresolved combination branch
 
             variables[match.group(3).lower()] = word
             if match.group(2) is None:
@@ -723,9 +779,6 @@ def dynamic_prompts(
                 return prompt
             return prompt, prompt_source_map, prompt_wildcard_map
         
-        # Seed the random number generator for wildcard selection
-        random.seed(seed)
-        
         # Regex to find '__something__' or '__something.txt__', optionally with a
         # '==<name>' (or silent '==!<name>') variable assignment
         pattern = re.compile(r'__(.+?)__(?:\s*==\s*(!)?<([A-Za-z0-9_]+)>)?')
@@ -767,7 +820,7 @@ def dynamic_prompts(
                         lines.append(trimmed)
     
                 # Choose one random valid line
-                chosen = random.choice(lines) if lines else ""
+                chosen = rng.choice(lines) if lines else ""
 
                 if variable_name:
                     chosen = _resolve_fragment(chosen)
@@ -787,8 +840,35 @@ def dynamic_prompts(
         last_index = 0
 
         for match in pattern.finditer(prompt):
-            replacement, was_resolved = replace_match(match)
             start, end = match.span()
+
+            # Switcher guard '<name>==value::' glued in front of the wildcard
+            emit_until = start
+            guard = _match_guard_before(prompt, start)
+            if guard is not None:
+                guard_start, guard_var, guard_value = guard
+                if guard_var not in variables:
+                    # Tag not assigned yet - keep guard + wildcard untouched for a later pass.
+                    result_parts.append(prompt[last_index:end])
+                    if result_source_map is not None:
+                        result_source_map.extend(prompt_source_map[last_index:end])
+                    if result_wildcard_map is not None:
+                        result_wildcard_map.extend(prompt_wildcard_map[last_index:end])
+                    last_index = end
+                    continue
+                emit_until = guard_start
+                if not _guard_is_true(guard_var, guard_value):
+                    # Guard false: drop guard + wildcard (incl. its assignment suffix,
+                    # which is part of the match) without reading the file.
+                    result_parts.append(prompt[last_index:emit_until])
+                    if result_source_map is not None:
+                        result_source_map.extend(prompt_source_map[last_index:emit_until])
+                    if result_wildcard_map is not None:
+                        result_wildcard_map.extend(prompt_wildcard_map[last_index:emit_until])
+                    last_index = end
+                    continue
+
+            replacement, was_resolved = replace_match(match)
 
             token_source_map = prompt_source_map[start:end] if prompt_source_map is not None else None
             token_wildcard_map = prompt_wildcard_map[start:end] if prompt_wildcard_map is not None else None
@@ -812,15 +892,15 @@ def dynamic_prompts(
                 if len(unique_inherited_ids) == 1:
                     wildcard_origin_id = inherited_ids[0]
 
-            result_parts.append(prompt[last_index:start])
+            result_parts.append(prompt[last_index:emit_until])
             result_parts.append(replacement)
 
             if result_source_map is not None:
-                result_source_map.extend(prompt_source_map[last_index:start])
+                result_source_map.extend(prompt_source_map[last_index:emit_until])
                 result_source_map.extend([None] * len(replacement))
 
             if result_wildcard_map is not None:
-                result_wildcard_map.extend(prompt_wildcard_map[last_index:start])
+                result_wildcard_map.extend(prompt_wildcard_map[last_index:emit_until])
                 result_wildcard_map.extend([wildcard_origin_id] * len(replacement))
 
             last_index = end
@@ -848,17 +928,42 @@ def dynamic_prompts(
         Replaces substrings enclosed in '{...}' with a randomly selected choice
         from their pipe-separated contents.
         """
-        # Seed the random number generator
-        random.seed(seed)
-    
         pattern = re.compile(r'{([^}{]*)}')
-    
+
+        search_offset = 0
         while True:
-            match = pattern.search(prompt)
+            match = pattern.search(prompt, search_offset)
             if not match:
                 break
-    
+
             start, end = match.span()
+
+            # Switcher guard '<name>==value::' glued in front of the block
+            replace_start = start
+            guard = _match_guard_before(prompt, start)
+            if guard is not None:
+                guard_start, guard_var, guard_value = guard
+                if guard_var not in variables:
+                    # Tag not assigned yet (e.g. branch-inner 'word==!<name>' still
+                    # pending) - defer this block to a later pass.
+                    search_offset = match.end()
+                    continue
+                if not _guard_is_true(guard_var, guard_value):
+                    # Guard false: remove guard + block + trailing assignment suffix.
+                    end_final = end
+                    false_suffix = VARIABLE_ASSIGN_PATTERN.match(prompt, end_final)
+                    if false_suffix:
+                        end_final = false_suffix.end()
+                    prompt = prompt[:guard_start] + prompt[end_final:]
+                    if prompt_source_map is not None:
+                        prompt_source_map = prompt_source_map[:guard_start] + prompt_source_map[end_final:]
+                    if prompt_wildcard_map is not None:
+                        prompt_wildcard_map = prompt_wildcard_map[:guard_start] + prompt_wildcard_map[end_final:]
+                    search_offset = 0
+                    continue
+                # Guard true: consume the prefix, resolve the block normally.
+                replace_start = guard_start
+
             choices_str = match.group(1)
             choices_source_map = prompt_source_map[start + 1:end - 1] if prompt_source_map is not None else None
             choices_wildcard_map = prompt_wildcard_map[start + 1:end - 1] if prompt_wildcard_map is not None else None
@@ -892,23 +997,41 @@ def dynamic_prompts(
             raw_choices_list = []
             raw_choice_maps = []
             raw_choice_wildcard_maps = []
+            # Pre-strip source map per branch: marking fallback for branches whose
+            # stripped text is empty (whitespace-only), so the chosen-branch white
+            # mark still lands on the branch's characters in the editor.
+            raw_choice_mark_maps = []
             current_choice_chars = []
             current_choice_map = []
             current_choice_wildcard_map = []
 
+            def _finish_choice(delimiter_source_index):
+                raw_map_snapshot = current_choice_map.copy() if recombined_source_map is not None else None
+                choice_text, choice_source_map = _strip_text_and_map(
+                    "".join(current_choice_chars),
+                    current_choice_map.copy() if recombined_source_map is not None else None,
+                )
+                _, choice_wildcard_map = _strip_text_and_map(
+                    "".join(current_choice_chars),
+                    current_choice_wildcard_map.copy() if recombined_wildcard_map is not None else None,
+                )
+                raw_choices_list.append(choice_text)
+                raw_choice_maps.append(choice_source_map)
+                raw_choice_wildcard_maps.append(choice_wildcard_map)
+                mark_map = None
+                if not choice_text:
+                    if raw_map_snapshot and any(i is not None for i in raw_map_snapshot):
+                        mark_map = raw_map_snapshot
+                    elif delimiter_source_index is not None:
+                        # Zero-length branch: mark its preceding '|' delimiter instead.
+                        mark_map = [delimiter_source_index]
+                raw_choice_mark_maps.append(mark_map)
+
+            previous_delimiter_source = None
             for index, char in enumerate(recombined):
                 if char == '|':
-                    choice_text, choice_source_map = _strip_text_and_map(
-                        "".join(current_choice_chars),
-                        current_choice_map.copy() if recombined_source_map is not None else None,
-                    )
-                    _, choice_wildcard_map = _strip_text_and_map(
-                        "".join(current_choice_chars),
-                        current_choice_wildcard_map.copy() if recombined_wildcard_map is not None else None,
-                    )
-                    raw_choices_list.append(choice_text)
-                    raw_choice_maps.append(choice_source_map)
-                    raw_choice_wildcard_maps.append(choice_wildcard_map)
+                    _finish_choice(previous_delimiter_source)
+                    previous_delimiter_source = recombined_source_map[index] if recombined_source_map is not None else None
                     current_choice_chars = []
                     current_choice_map = []
                     current_choice_wildcard_map = []
@@ -920,43 +1043,34 @@ def dynamic_prompts(
                 if recombined_wildcard_map is not None:
                     current_choice_wildcard_map.append(recombined_wildcard_map[index])
 
-            choice_text, choice_source_map = _strip_text_and_map(
-                "".join(current_choice_chars),
-                current_choice_map.copy() if recombined_source_map is not None else None,
-            )
-            _, choice_wildcard_map = _strip_text_and_map(
-                "".join(current_choice_chars),
-                current_choice_wildcard_map.copy() if recombined_wildcard_map is not None else None,
-            )
-            raw_choices_list.append(choice_text)
-            raw_choice_maps.append(choice_source_map)
-            raw_choice_wildcard_maps.append(choice_wildcard_map)
+            _finish_choice(previous_delimiter_source)
             
             
             weighted_choices = []
             unweighted_choices = []
             total_defined_weight = 0.0
             
-            for item, item_source_map, item_wildcard_map in zip(raw_choices_list, raw_choice_maps, raw_choice_wildcard_maps):
+            for item, item_source_map, item_wildcard_map, item_mark_map in zip(raw_choices_list, raw_choice_maps, raw_choice_wildcard_maps, raw_choice_mark_maps):
                 if '::' in item:
                     try:
                         weight_str, choice_text = item.split('::', 1)
                         weight = float(weight_str)
                         if not (0 <= weight <= 1):
                             raise ValueError("Weight must be between 0 and 1.")
-                        
+
                         choice_source_map = item_source_map[len(weight_str) + 2:] if item_source_map is not None else None
                         weighted_choices.append({
                             "text": choice_text,
                             "weight": weight,
                             "source_map": choice_source_map,
                             "wildcard_map": item_wildcard_map[len(weight_str) + 2:] if item_wildcard_map is not None else None,
+                            "mark_map": None,
                         })
                         total_defined_weight += weight
                     except ValueError:
-                        unweighted_choices.append((item, item_source_map, item_wildcard_map))
+                        unweighted_choices.append((item, item_source_map, item_wildcard_map, item_mark_map))
                 else:
-                    unweighted_choices.append((item, item_source_map, item_wildcard_map))
+                    unweighted_choices.append((item, item_source_map, item_wildcard_map, item_mark_map))
             
             if total_defined_weight > 1.0:
                 for i in range(len(weighted_choices)):
@@ -970,30 +1084,37 @@ def dynamic_prompts(
                     remaining_weight = 0
                     
                 equal_share_for_unweighted = remaining_weight / len(unweighted_choices)
-                for choice_text, choice_source_map, choice_wildcard_map in unweighted_choices:
+                for choice_text, choice_source_map, choice_wildcard_map, choice_mark_map in unweighted_choices:
                     weighted_choices.append({
                         "text": choice_text,
                         "weight": equal_share_for_unweighted,
                         "source_map": choice_source_map,
                         "wildcard_map": choice_wildcard_map,
+                        "mark_map": choice_mark_map,
                     })
     
             # --- Perform selection ---
             selected_choice = ""
             selected_choice_source_map = None
             selected_choice_wildcard_map = None
+            selected_choice_mark_map = None
             if not weighted_choices:
                 selected_choice = ""
             else:
                 choice_indexes = list(range(len(weighted_choices)))
                 weights_list = [item["weight"] for item in weighted_choices]
-    
-                selected_index = random.choices(choice_indexes, weights=weights_list, k=1)[0]
+
+                selected_index = rng.choices(choice_indexes, weights=weights_list, k=1)[0]
                 selected_choice = weighted_choices[selected_index]["text"]
                 selected_choice_source_map = weighted_choices[selected_index]["source_map"]
                 selected_choice_wildcard_map = weighted_choices[selected_index]["wildcard_map"]
+                selected_choice_mark_map = weighted_choices[selected_index].get("mark_map")
 
-            if selected_choice_source_map is not None:
+            if selected_choice_mark_map:
+                # Whitespace-only branch: its output is empty, mark the branch's
+                # original (pre-strip) characters so the pick is still visible.
+                _append_selected_ranges(selected_choice_mark_map, force=True)
+            elif selected_choice_source_map is not None:
                 _append_selected_ranges(selected_choice_source_map)
 
             # '{...}==<name>': fully resolve the picked choice, store it, and consume the
@@ -1004,15 +1125,20 @@ def dynamic_prompts(
                 variables[assignment.group(2).lower()] = resolved_value
                 end = assignment.end()
                 if assignment.group(1) is not None:
-                    resolved_value = ""
+                    # Silent assignment: emits nothing, but keep the chosen branch
+                    # white-marked in the editor (its chars never reach the output).
                     if prompt_source_map is not None:
+                        forced_source_indexes.update(i for i in (selected_choice_source_map or []) if i is not None)
                         selected_choice_source_map = []
+                    resolved_value = ""
                     if prompt_wildcard_map is not None:
                         selected_choice_wildcard_map = []
                 elif resolved_value != selected_choice:
-                    # Nested syntax resolved into generated text: it maps to no source
-                    # characters (and loses the post-run selection marking).
+                    # Nested syntax resolved into generated text: the output maps to no
+                    # source characters, but the branch's original chars stay visible in
+                    # the editor - keep their selection mark alive through the filter.
                     if prompt_source_map is not None:
+                        forced_source_indexes.update(i for i in (selected_choice_source_map or []) if i is not None)
                         selected_choice_source_map = [None] * len(resolved_value)
                     if prompt_wildcard_map is not None:
                         selected_choice_wildcard_map = [None] * len(resolved_value)
@@ -1020,12 +1146,13 @@ def dynamic_prompts(
                 # maps so the post-run selection marking survives.
                 selected_choice = resolved_value
 
-            # Replace the matched inner block with the selected choice
-            prompt = prompt[:start] + selected_choice + prompt[end:]
+            # Replace the matched inner block (and a consumed guard prefix) with the selected choice
+            prompt = prompt[:replace_start] + selected_choice + prompt[end:]
             if prompt_source_map is not None:
-                prompt_source_map = prompt_source_map[:start] + (selected_choice_source_map or []) + prompt_source_map[end:]
+                prompt_source_map = prompt_source_map[:replace_start] + (selected_choice_source_map or []) + prompt_source_map[end:]
             if prompt_wildcard_map is not None:
-                prompt_wildcard_map = prompt_wildcard_map[:start] + (selected_choice_wildcard_map or []) + prompt_wildcard_map[end:]
+                prompt_wildcard_map = prompt_wildcard_map[:replace_start] + (selected_choice_wildcard_map or []) + prompt_wildcard_map[end:]
+            search_offset = 0
     
         if prompt_source_map is None:
             return prompt
@@ -1046,6 +1173,8 @@ def dynamic_prompts(
 
         if not has_wildcards and not has_combinations:
             break # Exit the loop if no more dynamic content is found
+
+        iteration_snapshot = (prompt, len(variables))
 
         # Process wildcards recursively (NO _fix_prompt call here)
         if has_wildcards:
@@ -1073,18 +1202,74 @@ def dynamic_prompts(
                     break
                 max_subprocess_count -= 1
 
+        # Capture bare 'word==<name>' assignments (outside any braces) between passes
+        # so switcher guards can see branch-inner tags on the next pass.
+        if source_map is None:
+            prompt = _capture_literal_assignments(prompt, only_unbraced=True)
+        else:
+            prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=True)
+
+        if (prompt, len(variables)) == iteration_snapshot:
+            break  # only deferred guards (unassigned tags) remain - the sweep handles them
+
         max_process_count -= 1
 
     if max_process_count == 0 and ("__" in prompt or "{" in prompt or "}" in prompt):
         print("[VSmartPrompt] Warning: processing limit reached; possible infinite loop in prompt.")
 
-    # Plain-word assignments on the fully resolved text, then a final substitution pass
-    # for all references (including ones that appeared before their assignment).
+    def _sweep_guards(
+        text: str,
+        text_source_map: list[int | None] | None = None,
+        text_wildcard_map: list[int | None] | None = None,
+    ) -> str | tuple[str, list[int | None] | None, list[int | None] | None]:
+        """
+        Removes leftover guarded constructs whose tag was never assigned or whose
+        guard is false. A (rare) true guard surviving the loop just loses its prefix
+        and leaves its construct as literal text.
+        """
+        block_after = re.compile(r'\{[^{}]*\}(?:\s*==\s*!?<[A-Za-z0-9_]+>)?')
+        wildcard_after = re.compile(r'__.+?__(?:\s*==\s*!?<[A-Za-z0-9_]+>)?')
+
+        result_parts: list[str] = []
+        result_source_map: list[int | None] | None = [] if text_source_map is not None else None
+        result_wildcard_map: list[int | None] | None = [] if text_wildcard_map is not None else None
+        last_index = 0
+
+        for gm in GUARD_SCAN_PATTERN.finditer(text):
+            if gm.start() < last_index:
+                continue
+            construct = block_after.match(text, gm.end()) or wildcard_after.match(text, gm.end())
+            construct_end = construct.end() if construct else gm.end()
+            guard_true = gm.group(1).lower() in variables and _guard_is_true(gm.group(1).lower(), gm.group(2).strip().lower())
+
+            result_parts.append(text[last_index:gm.start()])
+            if result_source_map is not None:
+                result_source_map.extend(text_source_map[last_index:gm.start()])
+            if result_wildcard_map is not None:
+                result_wildcard_map.extend(text_wildcard_map[last_index:gm.start()])
+            last_index = gm.end() if guard_true else construct_end
+
+        result_parts.append(text[last_index:])
+        if result_source_map is not None:
+            result_source_map.extend(text_source_map[last_index:])
+        if result_wildcard_map is not None:
+            result_wildcard_map.extend(text_wildcard_map[last_index:])
+
+        updated_text = "".join(result_parts)
+        if text_source_map is None:
+            return updated_text
+        return updated_text, result_source_map, result_wildcard_map
+
+    # Plain-word assignments on the fully resolved text, then the guard sweep, then a
+    # final substitution pass for all references (including ones that appeared before
+    # their assignment).
     if source_map is None:
         prompt = _capture_literal_assignments(prompt)
+        prompt = _sweep_guards(prompt)
         prompt = _substitute_variables(prompt)
     else:
         prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map)
+        prompt, source_map, wildcard_origin_map = _sweep_guards(prompt, source_map, wildcard_origin_map)
         prompt, source_map, wildcard_origin_map = _substitute_variables(prompt, source_map, wildcard_origin_map)
 
     wildcard_resolutions: list[dict[str, str | int]] = []
@@ -1115,7 +1300,7 @@ class VSmartPrompt:
             "required": {
                 # Kept to preserve the widget order expected by older saved workflows.
                 "available_loras_stem": ("STRING", {"default": "", "dynamicPrompts": False, "tooltip": "Compatibility placeholder for older workflows. This field is kept only to preserve widget ordering."}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Giving the same seed and the exact same prompt will always return the same (output) prompt"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Same seed + same prompt + same connected in1-in4 texts always returns the same output prompt. Changed input text re-rolls the picks even with a fixed seed."}),
                 "line_suffix": ("STRING", {"multiline": False, "default": "", "dynamicPrompts": False, "tooltip": "Appends this string to the end of every line. Useful to automate suffixing of tags and descriptive text with either commas or single dots."}),
                 "single_line_output": ("BOOLEAN", {"default": True, "tooltip": "This must be True for multi-line combinations to work."}),
                 "remove_whitespaces": ("BOOLEAN", {"default": True, "tooltip": "Trims every line and converts multiple spaces to single space, ex: '   ' -> ' '. Also removes empty lines."}),
@@ -1126,6 +1311,10 @@ class VSmartPrompt:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "dynamicPrompts": False}),
+                "in1": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in1>. Inserted as-is (not re-resolved). The upstream branch only executes if <in1> appears in the prompt."}),
+                "in2": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in2>. Inserted as-is (not re-resolved). The upstream branch only executes if <in2> appears in the prompt."}),
+                "in3": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in3>. Inserted as-is (not re-resolved). The upstream branch only executes if <in3> appears in the prompt."}),
+                "in4": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in4>. Inserted as-is (not re-resolved). The upstream branch only executes if <in4> appears in the prompt."}),
             },
         }
 
@@ -1155,12 +1344,34 @@ remove_loras_pattern: Legacy compatibility toggle that strips LoRA tags from the
 wildcard_directory: The directory where TXT wildcard files are stored.
 """
 
-    def main(self, available_loras_stem, seed, line_suffix, single_line_output, remove_whitespaces, remove_empty_tags, load_loras_from_prompt, remove_loras_pattern, wildcard_directory, prompt=DEFAULT_PROMPT):
+    INPUT_SOCKET_NAMES = ("in1", "in2", "in3", "in4")
+
+    def check_lazy_status(self, prompt=DEFAULT_PROMPT, **kwargs):
+        # Request a connected input only when '<inN>' actually appears in the prompt
+        # text - otherwise the whole upstream branch is never executed.
+        needed = []
+        for name in self.INPUT_SOCKET_NAMES:
+            if name in kwargs and kwargs[name] is None and re.search(rf'<{name}>', prompt or "", re.IGNORECASE):
+                needed.append(name)
+        return needed
+
+    def main(self, available_loras_stem, seed, line_suffix, single_line_output, remove_whitespaces, remove_empty_tags, load_loras_from_prompt, remove_loras_pattern, wildcard_directory, prompt=DEFAULT_PROMPT, **kwargs):
         _ = available_loras_stem, load_loras_from_prompt
+        # Skipped (unused) lazy inputs arrive as None - treated like unconnected ones.
+        in1, in2, in3, in4 = (kwargs.get(name) for name in self.INPUT_SOCKET_NAMES)
         single_line_output = True
         remove_whitespaces = True
         remove_empty_tags = True
         wildcard_directory = normalize_wildcard_directory(wildcard_directory)
+
+        # Mix connected input texts into the effective seed: when an upstream node's
+        # output changes, this node's combination/wildcard picks re-roll too - even
+        # with a fixed seed widget. Same seed + same inputs stays fully reproducible.
+        connected_inputs = "\x1f".join(f"{name}={value}" for name, value in (("in1", in1), ("in2", in2), ("in3", in3), ("in4", in4)) if value is not None)
+        if connected_inputs:
+            input_digest = int.from_bytes(hashlib.sha256(connected_inputs.encode("utf-8")).digest()[:8], "big")
+            seed = (seed ^ input_digest) & 0xffffffffffffffff
+
         dp, selected_ranges, wildcard_resolutions = dynamic_prompts(
             prompt=prompt,
             seed=seed,
@@ -1170,6 +1381,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
             remove_empty_tags=remove_empty_tags,
             wildcard_dir=wildcard_directory,
             return_trace=True,
+            preset_variables={"in1": in1, "in2": in2, "in3": in3, "in4": in4},
         )
 
         if remove_loras_pattern:

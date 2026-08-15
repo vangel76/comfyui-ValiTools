@@ -10,8 +10,12 @@ if (!window.comfy_silver_weight_listener_added) {
         if (el && typeof el.silverTextWeighting === "function") {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") && (e.ctrlKey || e.metaKey)) {
                 e.stopImmediatePropagation();
-                e.preventDefault();
-                if (e.key === "ArrowUp" || e.key === "ArrowDown") el.silverTextWeighting(e);
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                    e.preventDefault();
+                    el.silverTextWeighting(e);
+                }
+                // Left/Right: keep ComfyUI's node shortcuts blocked but let the
+                // browser's native CTRL+arrow word jump / selection happen.
             }
         }
     }, true); 
@@ -115,14 +119,22 @@ app.registerExtension({
 		// partial reference being typed directly before the cursor ('<', '<ha', ...).
 		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_PARTIAL_REGEX = /<([A-Za-z0-9_]*)$/;
+		// Switcher guard '<name>==value::' glued to a '{...}' block or '__wildcard__'.
+		// Must stay in sync with GUARD_*_PATTERN in nodes.py.
+		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
 		const variableStyle = "color:#DA70D6; font-weight:bold;";
+		// String input sockets usable as variables in the text (<in1>..<in4>)
+		const INPUT_VAR_NAMES = ["in1", "in2", "in3", "in4"];
+		const getConnectedInputVars = (node) =>
+			INPUT_VAR_NAMES.filter((name) => node?.inputs?.some((i) => i.name === name && i.link != null));
 
         // Advanced syntax highlighting with fixed comment typing behavior
-		const highlight = (text, selectedRanges = [], wildcardExecutions = []) => {
+		const highlight = (text, selectedRanges = [], wildcardExecutions = [], externalVariables = []) => {
 			let work = applySelectedRangeMarkers(text, selectedRanges);
 
-			// Variable names assigned anywhere in the text (references to them highlight as valid)
-			const definedVariables = new Set();
+			// Variable names assigned anywhere in the text (references to them highlight as valid),
+			// plus externally provided ones (connected in1..in4 input sockets)
+			const definedVariables = new Set(externalVariables);
 			VARIABLE_ASSIGN_SCAN_REGEX.lastIndex = 0;
 			let variableAssignMatch;
 			while ((variableAssignMatch = VARIABLE_ASSIGN_SCAN_REGEX.exec(text)) !== null) {
@@ -231,7 +243,17 @@ app.registerExtension({
 			// 1) Structural highlighting (comments, wildcards, tags)
 			// ------------------------
 			work = highlightComments(work);
-			
+
+			// Switcher guards: '<name>==value::' glued to a following block or wildcard.
+			// Must run before wildcard/variable rules (they'd eat the '<name>' part).
+			work = work.replace(GUARD_REGEX, (match, name) => {
+				const valid = definedVariables.has(name.toLowerCase());
+				const style = valid
+					? "color:#FF8C00; font-weight:bold;"
+					: "color:#FF4444; font-weight:bold;";
+				return protect(`<span style="${style}">${escapeHTML(match)}</span>`);
+			});
+
 			// Wildcards
 			work = work.replace(/__.*?__/g, (match) => {
 				const occurrence = wildcardOccurrences[wildcardOccurrenceIndex++] || null;
@@ -753,6 +775,8 @@ app.registerExtension({
                 color: #ffffff;
                 background: #222222;
                 outline: none;
+                width: 100%;
+                box-sizing: border-box;
             `;
 			
 			let editorFontSize = 14;          // default font size in px
@@ -843,7 +867,7 @@ app.registerExtension({
             // Function to synchronize the custom editor from the ComfyUI widget value
             const updateEditorContent = () => {
                 const text = prompt_widget.value || "";
-				const nextHTML = highlight(text, this._silverSelectedCombinationRanges || [], this._silverResolvedWildcardExecutions || []);
+				const nextHTML = highlight(text, this._silverSelectedCombinationRanges || [], this._silverResolvedWildcardExecutions || [], getConnectedInputVars(this));
 				const shouldRestoreSelection = document.activeElement === editor;
 				const savedSelection = shouldRestoreSelection ? getEditorSelectionState(editor) : null;
 				const scrollTop = editor.scrollTop;
@@ -868,6 +892,13 @@ app.registerExtension({
                 this.setDirtyCanvas(true, true); // Ensure the canvas updates its size if content changes on load
             };
 			this._silverUpdateEditorContent = updateEditorContent;
+
+			// Re-highlight when in1..in4 sockets connect/disconnect so <in1> validity updates
+			const origOnConnectionsChange = this.onConnectionsChange;
+			this.onConnectionsChange = (...args) => {
+				origOnConnectionsChange?.apply(this, args);
+				updateEditorContent();
+			};
 
 			if (Array.isArray(this._silverSavedWidgetValues)) {
 				restoreSavedWidgetValues(this, this._silverSavedWidgetValues);
@@ -929,6 +960,9 @@ app.registerExtension({
 
 				// Collect assigned variables with their assignment source as preview (last assignment wins)
 				const vars = new Map();
+				for (const name of getConnectedInputVars(this)) {
+					vars.set(name, { name, preview: "input socket" });
+				}
 				VARIABLE_ASSIGN_PREVIEW_REGEX.lastIndex = 0;
 				let m;
 				while ((m = VARIABLE_ASSIGN_PREVIEW_REGEX.exec(plainText)) !== null) {
@@ -1323,6 +1357,29 @@ app.registerExtension({
                 //computeSize: (w, h) => [w, Math.max(50, Math.max(50, editor.scrollHeight + 10))]
 				//computeSize: (w, h) => [w, h]
             });
+
+			// Guard against layout glitches that collapse the DOM widget: keep the
+			// node at a sane minimum width and re-assert the editor's full width.
+			const MIN_NODE_WIDTH = 360;
+			const enforceEditorWidth = () => {
+				if (this.size && this.size[0] < MIN_NODE_WIDTH) {
+					this.setSize([MIN_NODE_WIDTH, this.size[1]]);
+				}
+				if (editor.style.width !== "100%") editor.style.width = "100%";
+				editor.style.boxSizing = "border-box";
+			};
+			enforceEditorWidth();
+			const origEditorOnResize = this.onResize;
+			this.onResize = (...args) => {
+				origEditorOnResize?.apply(this, args);
+				enforceEditorWidth();
+			};
+			const origEditorOnConfigure2 = this.onConfigure;
+			this.onConfigure = (...args) => {
+				origEditorOnConfigure2?.apply(this, args);
+				setTimeout(enforceEditorWidth, 0);
+			};
+
 			widget.serialize = false;
 			widget.serializeValue = () => undefined;
 			if (widget.options) {
@@ -1408,6 +1465,36 @@ app.registerExtension({
 			};
 			api.addEventListener("executed", executedListener);
 			this._silverExecutedListener = executedListener;
+
+			// Clear stale white marks on runs where this node was skipped entirely
+			// (lazy in1-in4: unused upstream branches never execute). Cached nodes
+			// keep their marks - their previous roll is still the live output.
+			const executionStartListener = () => { this._silverAwaitingResult = true; };
+			const executionCachedListener = (event) => {
+				const nodes = event?.detail?.nodes;
+				if (Array.isArray(nodes) && nodes.map(String).includes(String(this.id))) {
+					this._silverAwaitingResult = false;
+				}
+			};
+			const executedFlagListener = (event) => {
+				if (String(event?.detail?.node) === String(this.id)) this._silverAwaitingResult = false;
+			};
+			const executionDoneListener = () => {
+				if (!this._silverAwaitingResult) return;
+				this._silverAwaitingResult = false;
+				clearExecutionHighlights();
+				updateEditorContent();
+			};
+			api.addEventListener("execution_start", executionStartListener);
+			api.addEventListener("execution_cached", executionCachedListener);
+			api.addEventListener("executed", executedFlagListener);
+			api.addEventListener("execution_success", executionDoneListener);
+			this._silverExecutionFlowListeners = [
+				["execution_start", executionStartListener],
+				["execution_cached", executionCachedListener],
+				["executed", executedFlagListener],
+				["execution_success", executionDoneListener],
+			];
 			
 			
 			
@@ -1424,6 +1511,12 @@ app.registerExtension({
 				if (this._silverExecutedListener) {
 					api.removeEventListener("executed", this._silverExecutedListener);
 					this._silverExecutedListener = null;
+				}
+				if (Array.isArray(this._silverExecutionFlowListeners)) {
+					for (const [name, listener] of this._silverExecutionFlowListeners) {
+						api.removeEventListener(name, listener);
+					}
+					this._silverExecutionFlowListeners = null;
 				}
 				if (wildcardValidationTimeout) {
 					clearTimeout(wildcardValidationTimeout);
