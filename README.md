@@ -40,6 +40,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.6.4
+  - VSmartPrompt: the white mark for a chosen zero-length branch (`{text|}`) now actually renders - it marks the `|` delimiter (the mark's HTML previously misnested across the branch split and was dropped by the browser)
 - v1.6.3
   - VSmartPrompt: guard against the prompt editor collapsing to a narrow strip - editor asserts full node width (100% + border-box), node keeps a 360px minimum width, re-checked on resize and workflow load
 - v1.6.2

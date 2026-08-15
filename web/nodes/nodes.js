@@ -375,13 +375,40 @@ app.registerExtension({
 					const inner = text.slice(i + 1, closingIndex);
 					const options = splitCombinationOptions(inner);
 					const comboFrameStyle = getComboFrameStyle(depth);
+
+					// A zero-length chosen branch is marked on its '|' delimiter; the
+					// sentinels then straddle the option split (START at the end of one
+					// option, END at the start of the next) and would misnest. Strip
+					// them and white-mark the pipe itself instead.
+					const markedPipes = [];
+					for (let k = 0; k < options.length - 1; k++) {
+						if (options[k].endsWith(SILVER_SELECTED_RANGE_START) && options[k + 1].startsWith(SILVER_SELECTED_RANGE_END)) {
+							options[k] = options[k].slice(0, -1);
+							options[k + 1] = options[k + 1].slice(1);
+							markedPipes[k] = true;
+						} else {
+							markedPipes[k] = false;
+						}
+					}
+
 					const formattedOptions = options.map((option, index) => {
 						const optionStyle = index === 0 ? getUniformFirstOptionStyle(depth) : getUniformOtherOptionStyle(depth);
 						return `<span style="${optionStyle}">${formatCombinationBlocks(option, depth + 1)}</span>`;
 					});
 
+					let joined = "";
+					formattedOptions.forEach((formattedOption, index) => {
+						joined += formattedOption;
+						if (index < formattedOptions.length - 1) {
+							const pipeStyle = markedPipes[index]
+								? `${comboFrameStyle} background:#f2f2f2; border-radius:2px; padding:0 1px;`
+								: comboFrameStyle;
+							joined += `<span style="${pipeStyle}">|</span>`;
+						}
+					});
+
 					result += protect(
-						`<span><span style="${comboFrameStyle}">{</span>${formattedOptions.join(`<span style="${comboFrameStyle}">|</span>`)}<span style="${comboFrameStyle}">}</span></span>`
+						`<span><span style="${comboFrameStyle}">{</span>${joined}<span style="${comboFrameStyle}">}</span></span>`
 					);
 					i = closingIndex;
 				}
