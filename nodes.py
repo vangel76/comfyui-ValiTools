@@ -24,10 +24,11 @@ VARIABLE_ASSIGN_PATTERN = re.compile(r'\s*==\s*(!)?<([A-Za-z0-9_]+)>')  # used w
 VARIABLE_REF_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>')
 # 'word==<name>' on fully resolved text: captures the single word right before '=='
 LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)>')
-# Switcher guard: '<name>==value::' glued to a following '{...}' block or '__wildcard__'
-# gates it on the variable's value (case-insensitive). Must stay in sync with nodes.js.
-GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
-GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
+# Switcher guard: '<name>==value::' / '<name>!=value::' glued to a following '{...}'
+# block or '__wildcard__' gates it on the variable's value (case-insensitive).
+# Must stay in sync with nodes.js.
+GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
+GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
 
 DEFAULT_PROMPT = r"""### Instructions and Tips
 
@@ -83,11 +84,12 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 
 # Gate a combination or wildcard on a variable's value: glue '<name>==value::' DIRECTLY in front of it.
 # Value matches (case-insensitive) -> it resolves normally. No match -> the whole thing outputs nothing.
+# '<name>!=value::' is the NOT form: fires for every value EXCEPT the given one.
 # Assign the tag BEFORE the switch. Silent branch tags are perfect for this:
 
-    she is {cutting the wedding cake cake==!<act>|holding a champagne glas glass==!<act>}.
+    she is {cutting the wedding cake cake==!<act>|holding a champagne glas glass==!<act>|dancing dance==!<act>}.
     <act>==cake::{she serves the cake|she cuts another slice}
-    <act>==glass::{she drops the glas|she takes a sip}
+    <act>!=cake::{she is not near the cake}      # fires for glass AND dance
     <act>==cake::__cake_actions__               # wildcards can be gated too
 
 ## Word weightning
@@ -462,17 +464,19 @@ def dynamic_prompts(
             if value is not None
         })
 
-    def _match_guard_before(text: str, construct_start: int) -> tuple[int, str, str] | None:
-        """Returns (guard_start, var_name, wanted_value) for a '<name>==value::' prefix
-        glued to the construct at construct_start, or None."""
+    def _match_guard_before(text: str, construct_start: int) -> tuple[int, str, str, str] | None:
+        """Returns (guard_start, var_name, operator, wanted_value) for a
+        '<name>==value::' / '<name>!=value::' prefix glued to the construct at
+        construct_start, or None."""
         slice_start = max(0, construct_start - 96)
         gm = GUARD_BEFORE_PATTERN.search(text[slice_start:construct_start])
         if not gm:
             return None
-        return slice_start + gm.start(), gm.group(1).lower(), gm.group(2).strip().lower()
+        return slice_start + gm.start(), gm.group(1).lower(), gm.group(2), gm.group(3).strip().lower()
 
-    def _guard_is_true(var_name: str, wanted_value: str) -> bool:
-        return str(variables.get(var_name, "")).strip().lower() == wanted_value
+    def _guard_is_true(var_name: str, operator: str, wanted_value: str) -> bool:
+        equal = str(variables.get(var_name, "")).strip().lower() == wanted_value
+        return equal if operator == "==" else not equal
 
     def _substitute_variables(
         text: str,
@@ -846,7 +850,7 @@ def dynamic_prompts(
             emit_until = start
             guard = _match_guard_before(prompt, start)
             if guard is not None:
-                guard_start, guard_var, guard_value = guard
+                guard_start, guard_var, guard_op, guard_value = guard
                 if guard_var not in variables:
                     # Tag not assigned yet - keep guard + wildcard untouched for a later pass.
                     result_parts.append(prompt[last_index:end])
@@ -857,7 +861,7 @@ def dynamic_prompts(
                     last_index = end
                     continue
                 emit_until = guard_start
-                if not _guard_is_true(guard_var, guard_value):
+                if not _guard_is_true(guard_var, guard_op, guard_value):
                     # Guard false: drop guard + wildcard (incl. its assignment suffix,
                     # which is part of the match) without reading the file.
                     result_parts.append(prompt[last_index:emit_until])
@@ -942,13 +946,13 @@ def dynamic_prompts(
             replace_start = start
             guard = _match_guard_before(prompt, start)
             if guard is not None:
-                guard_start, guard_var, guard_value = guard
+                guard_start, guard_var, guard_op, guard_value = guard
                 if guard_var not in variables:
                     # Tag not assigned yet (e.g. branch-inner 'word==!<name>' still
                     # pending) - defer this block to a later pass.
                     search_offset = match.end()
                     continue
-                if not _guard_is_true(guard_var, guard_value):
+                if not _guard_is_true(guard_var, guard_op, guard_value):
                     # Guard false: remove guard + block + trailing assignment suffix.
                     end_final = end
                     false_suffix = VARIABLE_ASSIGN_PATTERN.match(prompt, end_final)
@@ -1240,7 +1244,7 @@ def dynamic_prompts(
                 continue
             construct = block_after.match(text, gm.end()) or wildcard_after.match(text, gm.end())
             construct_end = construct.end() if construct else gm.end()
-            guard_true = gm.group(1).lower() in variables and _guard_is_true(gm.group(1).lower(), gm.group(2).strip().lower())
+            guard_true = gm.group(1).lower() in variables and _guard_is_true(gm.group(1).lower(), gm.group(2), gm.group(3).strip().lower())
 
             result_parts.append(text[last_index:gm.start()])
             if result_source_map is not None:

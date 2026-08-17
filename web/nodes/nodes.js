@@ -119,9 +119,9 @@ app.registerExtension({
 		// partial reference being typed directly before the cursor ('<', '<ha', ...).
 		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_PARTIAL_REGEX = /<([A-Za-z0-9_]*)$/;
-		// Switcher guard '<name>==value::' glued to a '{...}' block or '__wildcard__'.
-		// Must stay in sync with GUARD_*_PATTERN in nodes.py.
-		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*==\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
+		// Switcher guard '<name>==value::' / '<name>!=value::' glued to a '{...}'
+		// block or '__wildcard__'. Must stay in sync with GUARD_*_PATTERN in nodes.py.
+		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*(?:==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
 		const variableStyle = "color:#DA70D6; font-weight:bold;";
 		// String input sockets usable as variables in the text (<in1>..<in4>)
 		const INPUT_VAR_NAMES = ["in1", "in2", "in3", "in4"];

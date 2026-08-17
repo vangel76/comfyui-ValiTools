@@ -14,7 +14,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
-- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>==glass::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
+- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
 - Outputs: `prompt` (resolved), `original_prompt`
 
 Based on [ComfyUI-RichText_BasicDynamicPrompts](https://github.com/GreenLandisaLie/ComfyUI-RichText_BasicDynamicPrompts) (heavily modified fork).
@@ -40,6 +40,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.7.0
+  - VSmartPrompt: switcher NOT guards - `<name>!=value::` fires for every value except the given one; never-assigned variables remove the construct like with `==`
 - v1.6.4
   - VSmartPrompt: the white mark for a chosen zero-length branch (`{text|}`) now actually renders - it marks the `|` delimiter (the mark's HTML previously misnested across the branch split and was dropped by the browser)
 - v1.6.3
