@@ -40,6 +40,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.7.1
+  - VSmartPrompt: copying/cutting from the editor now puts plain text on the clipboard - previously the syntax-highlighting HTML came along and markdown-aware paste targets rendered the bold styling as `**...**`
 - v1.7.0
   - VSmartPrompt: switcher NOT guards - `<name>!=value::` fires for every value except the given one; never-assigned variables remove the construct like with `==`
 - v1.6.4

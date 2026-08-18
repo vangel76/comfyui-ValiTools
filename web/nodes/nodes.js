@@ -1422,8 +1422,28 @@ app.registerExtension({
 			};
 			
 			// FIX issue caused by: https://github.com/Comfy-Org/ComfyUI_frontend/pull/6087/files
-			editor.addEventListener("copy", stopPropagation);
-			editor.addEventListener("cut", stopPropagation);
+			// Copy/cut PLAIN TEXT only: the default copies the highlighting HTML, and
+			// markdown-aware paste targets turn the bold spans into '**...**'.
+			const handleCopy = (e) => {
+				e.stopPropagation();
+				const state = getEditorSelectionState(editor);
+				if (!state || state.isCollapsed || !e.clipboardData) return;
+				const plain = getEditorPlainText(editor).substring(state.start, state.end);
+				e.clipboardData.setData("text/plain", plain);
+				e.preventDefault();
+			};
+			editor.addEventListener("copy", handleCopy);
+			editor.addEventListener("cut", (e) => {
+				const state = getEditorSelectionState(editor);
+				handleCopy(e);
+				if (!state || state.isCollapsed) return;
+				const text = getEditorPlainText(editor);
+				prompt_widget.value = fixCommentBody(text.substring(0, state.start) + text.substring(state.end));
+				clearExecutionHighlights();
+				invalidateWildcardValidation();
+				updateEditorContent();
+				setPlainCursorPosition(editor, state.start);
+			});
 			
 			
 			
