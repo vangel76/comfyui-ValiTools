@@ -1,9 +1,11 @@
 [project]
 name = "valitools"
-description = "ValiTools - a collection of ComfyUI nodes. Currently: VSmartPrompt, a Dynamic Prompts node with a rich-text editor, reusable variables and post-run selection highlighting."
+description = "ValiTools node collection: VSmartPrompt (Dynamic Prompts with rich-text editor, reusable variables, switcher conditions, chaining inputs and post-run selection highlighting), VFileRandom (no-repeat random image loader) and VRandomSelector (lazy random passthrough of N same-type inputs)."
 version = "1.7.1"
 license = { file = "LICENSE" }
+urls = { Repository = "https://github.com/vangel76/comfyui-ValiTools" }
 
 [tool.comfy]
+PublisherId = "vangel"
 DisplayName = "ValiTools"
 Icon = ""
