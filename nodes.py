@@ -1166,6 +1166,32 @@ def dynamic_prompts(
     
     # --- Main function body: Fix applied here ---
     
+    # Strip comments up front (map-aware) so comment text can never trigger
+    # assignments, guards, wildcard pulls or combination rolls during resolution.
+    # (_fix_prompt's own comment removal at the end then finds nothing left.)
+    def _strip_all_comments(
+        text: str,
+        text_source_map: list[int | None] | None,
+        text_wildcard_map: list[int | None] | None,
+    ) -> tuple[str, list[int | None] | None, list[int | None] | None]:
+        lines, line_maps = _split_lines_with_map(text, text_source_map)
+        _, line_wildcard_maps = _split_lines_with_map(text, text_wildcard_map)
+        cleaned_lines: list[str] = []
+        cleaned_maps: list[list[int | None] | None] = []
+        cleaned_wildcard_maps: list[list[int | None] | None] = []
+        for line, line_map, line_wmap in zip(lines, line_maps, line_wildcard_maps):
+            cleaned, cleaned_map = _remove_comments_and_map(line, line_map)
+            _, cleaned_wmap = _remove_comments_and_map(line, line_wmap)
+            cleaned_lines.append(cleaned)
+            cleaned_maps.append(cleaned_map)
+            cleaned_wildcard_maps.append(cleaned_wmap)
+        joined, joined_map = _join_text_segments(cleaned_lines, cleaned_maps, "\n")
+        _, joined_wmap = _join_text_segments(cleaned_lines, cleaned_wildcard_maps, "\n")
+        return joined, joined_map, joined_wmap
+
+    if "#" in prompt:
+        prompt, source_map, wildcard_origin_map = _strip_all_comments(prompt, source_map, wildcard_origin_map)
+
     # NOTE: reference substitution deliberately happens only AFTER the resolution loop:
     # substituting during the loop would fill '<name>' inside not-yet-captured
     # 'word==<name>' assignments and freeze references to stale values.

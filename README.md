@@ -17,6 +17,33 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
 - Outputs: `prompt` (resolved), `original_prompt`
 
+#### Example - every feature at a glance
+
+![Example prompt with all features](imgs/example_prompt.png)
+
+```text
+## EXAMPLE - every feature in one prompt
+
+a {photo|{oil|water} painting} of a {0.7::cute|scary} __animal__==<pet>
+# {a|b} picks one option (nesting ok), '0.7::' sets its chance to 70%
+# __animal__ pulls a random line from animal.txt, '==<pet>' remembers the result
+
+the <pet> naps in a (cozy:1.2) {garden|kitchen}. {day|night}==!<time> #the same <pet> again!#
+# '<pet>' outputs the SAME value everywhere. '==!<time>' remembers silently (outputs nothing)
+
+<time>==day::{sunlight warms the <pet>|birds sing}
+<time>!=day::{the <pet> sleeps in the dark}
+# switcher: a gated block only appears when its condition matches the remembered value
+```
+
+With the picks shown above (white marks), the output is:
+
+```text
+a photo of a cute fox the fox naps in a (cozy:1.2) kitchen. the fox sleeps in the dark
+```
+
+Colors: green/blue = combination options per nesting level, gold = wildcards, violet = variables, orange = switcher conditions, green italics = comments, **white marks = what the last run actually picked**.
+
 Based on [ComfyUI-RichText_BasicDynamicPrompts](https://github.com/GreenLandisaLie/ComfyUI-RichText_BasicDynamicPrompts) (heavily modified fork).
 
 ### VFileRandom
@@ -40,6 +67,9 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.7.2
+  - VSmartPrompt: comments are now stripped BEFORE resolution - text inside comments can no longer trigger variable assignments, switcher guards, wildcard pulls or combination rolls (previously a comment like `'==<pet>' remembers` silently overwrote the variable)
+  - README: visual all-features example with editor coloring
 - v1.7.1
   - VSmartPrompt: copying/cutting from the editor now puts plain text on the clipboard - previously the syntax-highlighting HTML came along and markdown-aware paste targets rendered the bold styling as `**...**`
 - v1.7.0
