@@ -12,7 +12,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); CTRL+Click opens or creates the file
 - **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
-- **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover
+- **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
 - Outputs: `prompt` (resolved), `original_prompt`
@@ -55,6 +55,7 @@ Loads a random image from a folder — like a shuffled deck: no image repeats un
 - `include_subfolders` scans recursively; `reset_cycle` starts a fresh shuffled cycle
 - Keep `seed` on *randomize* — it only triggers a new draw each queue; fix it to pause drawing
 - Outputs: `image`, `mask` (from alpha), `filename` (relative to folder), `remaining_in_cycle`, `filename_noext`
+- After each run the node displays the cycle progress (e.g. `45 / 235`) so you can see when the deck reshuffles
 
 ### VRandomSelector
 
@@ -67,6 +68,10 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.8.1
+  - VSmartPrompt: hovering a variable after a run shows its rolled value - works on assignments (`==<name>`), references (`<name>`) and switcher conditions; resolved variables get a subtle violet underline like resolved wildcards
+- v1.8.0
+  - VFileRandom: cycle progress counter shown on the node after each run (`45 / 235` = 45th image drawn of a 235-image cycle)
 - v1.7.2
   - VSmartPrompt: comments are now stripped BEFORE resolution - text inside comments can no longer trigger variable assignments, switcher guards, wildcard pulls or combination rolls (previously a comment like `'==<pet>' remembers` silently overwrote the variable)
   - README: visual all-features example with editor coloring

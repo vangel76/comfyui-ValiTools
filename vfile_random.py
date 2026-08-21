@@ -51,7 +51,9 @@ def _scan_images(folder, include_subfolders):
 
 
 def _draw_from_bag(folder, include_subfolders, seed, reset_cycle):
-    """Pick the next image of the no-repeat cycle and return (relative_name, remaining_after)."""
+    """Pick the next image of the no-repeat cycle.
+
+    Returns (relative_name, remaining_after, cycle_total)."""
     files = _scan_images(folder, include_subfolders)
     if not files:
         raise ValueError(f"VFileRandom: no image files found in '{folder}'")
@@ -88,7 +90,7 @@ def _draw_from_bag(folder, include_subfolders, seed, reset_cycle):
         state[key] = {"remaining": remaining, "drawn": drawn}
         _save_state(state)
 
-    return pick, len(remaining)
+    return pick, len(remaining), len(remaining) + len(drawn)
 
 
 def _load_image_tensor(path):
@@ -140,15 +142,19 @@ the deck reshuffles.
         if not folder or not os.path.isdir(folder):
             raise ValueError(f"VFileRandom: '{folder}' is not a directory")
 
-        name, remaining = _draw_from_bag(folder, include_subfolders, seed, reset_cycle)
+        name, remaining, cycle_total = _draw_from_bag(folder, include_subfolders, seed, reset_cycle)
         path = os.path.join(folder, name)
         try:
             image, mask = _load_image_tensor(path)
         except Exception as e:
             raise ValueError(f"VFileRandom: could not load '{path}': {e}")
 
-        print(f"[VFileRandom] {name} ({remaining} left in cycle)")
-        return (image, mask, name, remaining, os.path.splitext(name)[0])
+        drawn = cycle_total - remaining
+        print(f"[VFileRandom] {name} ({drawn}/{cycle_total}, {remaining} left in cycle)")
+        return {
+            "ui": {"cycle": [f"{drawn} / {cycle_total}"]},
+            "result": (image, mask, name, remaining, os.path.splitext(name)[0]),
+        }
 
 
 NODE_CLASS_MAPPINGS = {

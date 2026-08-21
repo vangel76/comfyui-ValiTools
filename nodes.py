@@ -1318,7 +1318,7 @@ def dynamic_prompts(
     if return_trace:
         selected_ranges = _filter_selected_ranges_to_source_map(selected_ranges, source_map)
         selected_ranges.sort(key=lambda item: (item[0], item[1]))
-        return prompt, selected_ranges, wildcard_resolutions
+        return prompt, selected_ranges, wildcard_resolutions, dict(variables)
 
     return prompt
 
@@ -1402,7 +1402,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
             input_digest = int.from_bytes(hashlib.sha256(connected_inputs.encode("utf-8")).digest()[:8], "big")
             seed = (seed ^ input_digest) & 0xffffffffffffffff
 
-        dp, selected_ranges, wildcard_resolutions = dynamic_prompts(
+        dp, selected_ranges, wildcard_resolutions, variable_values = dynamic_prompts(
             prompt=prompt,
             seed=seed,
             line_suffix=line_suffix,
@@ -1425,6 +1425,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
             "ui": {
                 "selected_ranges": selected_ranges,
                 "wildcard_resolutions": wildcard_resolutions,
+                "variable_values": [variable_values],
             },
             "result": (dp, prompt),
         }

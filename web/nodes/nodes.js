@@ -129,7 +129,20 @@ app.registerExtension({
 			INPUT_VAR_NAMES.filter((name) => node?.inputs?.some((i) => i.name === name && i.link != null));
 
         // Advanced syntax highlighting with fixed comment typing behavior
-		const highlight = (text, selectedRanges = [], wildcardExecutions = [], externalVariables = []) => {
+		const highlight = (text, selectedRanges = [], wildcardExecutions = [], externalVariables = [], variableValues = null) => {
+			// Post-run tooltip for variables: 'name' -> resolved value (lowercased keys)
+			const variableTitle = (name) => {
+				const value = variableValues?.[name.toLowerCase()];
+				if (value === undefined || value === null) return "";
+				const safe = String(value)
+					.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+					.replace(/"/g, "&quot;").replace(/\r?\n/g, "&#10;");
+				return ` title="&lt;${name}&gt; = ${safe}"`;
+			};
+			const variableValueStyle = (name) =>
+				variableValues?.[name.toLowerCase()] !== undefined
+					? " background:rgba(218, 112, 214, 0.18); box-shadow:inset 0 -1px 0 rgba(218, 112, 214, 0.85); border-radius:3px; padding:0 1px;"
+					: "";
 			let work = applySelectedRangeMarkers(text, selectedRanges);
 
 			// Variable names assigned anywhere in the text (references to them highlight as valid),
@@ -251,7 +264,7 @@ app.registerExtension({
 				const style = valid
 					? "color:#FF8C00; font-weight:bold;"
 					: "color:#FF4444; font-weight:bold;";
-				return protect(`<span style="${style}">${escapeHTML(match)}</span>`);
+				return protect(`<span style="${style}${variableValueStyle(name)}"${variableTitle(name)}>${escapeHTML(match)}</span>`);
 			});
 
 			// Wildcards
@@ -276,13 +289,16 @@ app.registerExtension({
 				const valid = /\S\s*$/.test(whole.substring(0, offset));
 				let style = valid ? variableStyle : "color:#FF4444; font-weight:bold;";
 				if (valid && bang) style += " opacity:0.6; font-style:italic;";
-				return protect(`<span style="${style}">${escapeHTML(match)}</span>`);
+				if (valid) style += variableValueStyle(name);
+				return protect(`<span style="${style}"${valid ? variableTitle(name) : ""}>${escapeHTML(match)}</span>`);
 			});
 
 			// Variable references: <name> - violet when assigned somewhere, red otherwise
 			work = work.replace(VARIABLE_REF_REGEX, (match, name) => {
-				const color = definedVariables.has(name.toLowerCase()) ? "#DA70D6" : "#FF4444";
-				return protect(`<span style="color:${color}; font-weight:bold;">${escapeHTML(match)}</span>`);
+				const assigned = definedVariables.has(name.toLowerCase());
+				const color = assigned ? "#DA70D6" : "#FF4444";
+				const extra = assigned ? variableValueStyle(name) : "";
+				return protect(`<span style="color:${color}; font-weight:bold;${extra}"${assigned ? variableTitle(name) : ""}>${escapeHTML(match)}</span>`);
 			});
 
 			// Escape remaining text
@@ -819,6 +835,7 @@ app.registerExtension({
 			const clearExecutionHighlights = () => {
 				clearSelectedCombinationRanges();
 				clearResolvedWildcardExecutions();
+				this._silverVariableValues = null;
 			};
 			const invalidateWildcardValidation = () => {
 				lastWildcardValidationSignature = "";
@@ -894,7 +911,7 @@ app.registerExtension({
             // Function to synchronize the custom editor from the ComfyUI widget value
             const updateEditorContent = () => {
                 const text = prompt_widget.value || "";
-				const nextHTML = highlight(text, this._silverSelectedCombinationRanges || [], this._silverResolvedWildcardExecutions || [], getConnectedInputVars(this));
+				const nextHTML = highlight(text, this._silverSelectedCombinationRanges || [], this._silverResolvedWildcardExecutions || [], getConnectedInputVars(this), this._silverVariableValues || null);
 				const shouldRestoreSelection = document.activeElement === editor;
 				const savedSelection = shouldRestoreSelection ? getEditorSelectionState(editor) : null;
 				const scrollTop = editor.scrollTop;
@@ -1508,6 +1525,8 @@ app.registerExtension({
 				const text = prompt_widget.value || "";
 				this._silverSelectedCombinationRanges = normalizeSelectedRanges(selectedRanges, text.length);
 				this._silverResolvedWildcardExecutions = normalizeWildcardResolutions(wildcardResolutions, text.length);
+				const variableValues = detail.output?.variable_values?.[0];
+				this._silverVariableValues = (variableValues && typeof variableValues === "object") ? variableValues : null;
 				updateEditorContent();
 			};
 			api.addEventListener("executed", executedListener);
