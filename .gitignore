@@ -2,3 +2,7 @@ CLAUDE.md
 AGENTS.md
 .roo/
 __pycache__/
+node.zip
+.codex
+.tracking
+vfile_random_state.json

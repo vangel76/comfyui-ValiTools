@@ -1,11 +1,17 @@
 [project]
 name = "valitools"
 description = "ValiTools node collection: VSmartPrompt (Dynamic Prompts with rich-text editor, reusable variables, switcher conditions, chaining inputs and post-run selection highlighting), VFileRandom (no-repeat random image loader) and VRandomSelector (lazy random passthrough of N same-type inputs)."
-version = "1.8.1"
+version = "1.10.0"
 license = { file = "LICENSE" }
-urls = { Repository = "https://github.com/vangel76/comfyui-ValiTools" }
+requires-python = ">=3.9"
+classifiers = [
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/vangel76/comfyui-ValiTools"
+"Bug Tracker" = "https://github.com/vangel76/comfyui-ValiTools/issues"
 
 [tool.comfy]
 PublisherId = "vangel"
 DisplayName = "ValiTools"
-Icon = ""

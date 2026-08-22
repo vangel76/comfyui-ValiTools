@@ -9,9 +9,10 @@ A collection of ComfyUI custom nodes. More tools will be added over time.
 A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 
 - **Combinations**: `{a|b}` with optional `N::` weights, nested at will, per-level coloring
-- **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); CTRL+Click opens or creates the file
+- **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); CTRL+Click opens or creates the file in a built-in editor (works on remote installs too)
 - **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
+- **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
@@ -68,6 +69,17 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.10.0
+  - VSmartPrompt: CTRL+Click on a wildcard now opens its `.txt` in a built-in editor overlay (load, edit, save) instead of handing the path to the operating system's file handler. This removes the last system call from the package - the old behaviour never worked on remote ComfyUI installs and got the package flagged by the registry's security scan
+  - Packaging: registry metadata completed (`[project.urls]` table, `requires-python`, classifiers, empty `Icon` removed), `.comfyignore` added, build artifacts (`node.zip`, `.codex`, `.tracking`) removed from git, and a GitHub Action publishes automatically when `pyproject.toml` changes
+- v1.9.3
+  - VSmartPrompt: find & replace can be restricted to the selected text - selecting several lines and pressing `CTRL+F` scopes it automatically, the `⧉` button toggles it, and the scoped region is tinted in the editor
+- v1.9.2
+  - VSmartPrompt: fixed undo/redo staying greyed out - ComfyUI's widget setter fires `callback()` on every assignment, so the node's own edits looked like external changes and reset the history on each keystroke. Own writes are now recognised; typed words group into one undo step, everything else (paste, cut, Enter, Tab, autocomplete, weighting, find & replace, external changes) is its own step, 500 steps deep
+- v1.9.1
+  - VSmartPrompt: the editor toolbar is easier to reach - it shows while the mouse is anywhere over the editor area, stays visible while the cursor travels to it, and dims to 55% opacity until hovered
+- v1.9.0
+  - VSmartPrompt: find & replace in the editor (`CTRL+F` / `CTRL+H`, plain text, case toggle, match counter, replace / replace all) and a real undo/redo history with toolbar buttons and `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` - the browser's own undo was dead because every edit rewrites the highlighted markup. Matches are painted with the CSS Custom Highlight API, so the syntax highlighting stays untouched
 - v1.8.1
   - VSmartPrompt: hovering a variable after a run shows its rolled value - works on assignments (`==<name>`), references (`<name>`) and switcher conditions; resolved variables get a subtle violet underline like resolved wildcards
 - v1.8.0

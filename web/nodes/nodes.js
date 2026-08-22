@@ -1,6 +1,8 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "/scripts/api.js";
 import { AutocompleteDropdown } from "../widgets/autocomplete_dropdown.js";
+import { FindReplaceBar } from "../widgets/find_replace_bar.js";
+import { WildcardEditor } from "../widgets/wildcard_editor.js";
 
 
 // Note: trying to block/bypass ComfyUI's native node CTRL+UP/DOWN/LEFT/RIGHT shortcuts does not work from within editor. Doing a global window listener and blocking it this way works
@@ -540,18 +542,18 @@ app.registerExtension({
         };
         
 		// Used for text selection + CTRL+UP/DOWN
-		const setPlainSelectionRange = (editor, startOffset, endOffset) => {
-			const sel = window.getSelection();
-			const range = document.createRange();
+		// Maps plain-text offsets to a DOM range inside the highlighted markup.
+		// Returns null when the offsets are out of range.
+		const createPlainRange = (editor, startOffset, endOffset) => {
 			let currentOffset = 0;
 			let startNode, startNodeOffset, endNode, endNodeOffset;
-		
+
 			const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null, false);
 			let node;
-		
+
 			while ((node = walker.nextNode())) {
 				const nodeLength = node.textContent.length;
-		
+
 				// Find Start
 				if (!startNode && currentOffset + nodeLength >= startOffset) {
 					startNode = node;
@@ -562,14 +564,24 @@ app.registerExtension({
 					endNode = node;
 					endNodeOffset = endOffset - currentOffset;
 				}
-		
+
 				currentOffset += nodeLength;
 				if (startNode && endNode) break;
 			}
-		
-			if (startNode && endNode) {
-				range.setStart(startNode, startNodeOffset);
-				range.setEnd(endNode, endNodeOffset);
+
+			if (!startNode || !endNode) return null;
+
+			const range = document.createRange();
+			range.setStart(startNode, startNodeOffset);
+			range.setEnd(endNode, endNodeOffset);
+			return range;
+		};
+
+		const setPlainSelectionRange = (editor, startOffset, endOffset) => {
+			const sel = window.getSelection();
+			const range = createPlainRange(editor, startOffset, endOffset);
+
+			if (range) {
 				sel.removeAllRanges();
 				sel.addRange(range);
 				return;
@@ -908,6 +920,8 @@ app.registerExtension({
 				}, 250);
 			};
 
+			let findBar = null;
+
             // Function to synchronize the custom editor from the ComfyUI widget value
             const updateEditorContent = () => {
                 const text = prompt_widget.value || "";
@@ -933,9 +947,111 @@ app.registerExtension({
 				}
 
 				scheduleWildcardCacheValidation(text);
+				findBar?.refresh(); // match ranges live in the rebuilt markup
                 this.setDirtyCanvas(true, true); // Ensure the canvas updates its size if content changes on load
             };
 			this._silverUpdateEditorContent = updateEditorContent;
+
+			// --- UNDO / REDO HISTORY -------------------------------------------
+			// The browser's native undo is useless here: every keystroke rewrites
+			// innerHTML for the syntax highlighting, which wipes its history. This
+			// keeps plain-text snapshots instead (typing bursts are coalesced).
+			const textHistory = {
+				entries: [],
+				index: -1,
+				lastTime: 0,
+				lastWasTyping: false,
+				applying: false,
+				knownText: null,   // last text WE wrote - lets the widget callback tell own vs external changes
+				baselinePending: true, // the first external value (workflow load) replaces the baseline
+				MAX: 500,
+				COALESCE_MS: 600,
+			};
+
+			// ComfyUI's widget setter runs `callback(value)` on every assignment, so all our
+			// own writes go through here: knownText marks them, otherwise the callback would
+			// mistake each keystroke for an external change and reset the undo history.
+			const setWidgetText = (text) => {
+				textHistory.knownText = text;
+				prompt_widget.value = text;
+			};
+
+			const historyReset = (text) => {
+				const baseline = text ?? (prompt_widget.value || "");
+				textHistory.entries = [{ text: baseline, cursor: 0 }];
+				textHistory.index = 0;
+				textHistory.lastWasTyping = false;
+				textHistory.knownText = baseline;
+				findBar?.syncButtons();
+			};
+
+			const historyRecord = (text, cursor, isTyping = false) => {
+				if (textHistory.applying) return;
+				const current = textHistory.entries[textHistory.index];
+				if (current && current.text === text) return;
+
+				textHistory.baselinePending = false; // the node is being edited now
+				textHistory.knownText = text;
+				const now = Date.now();
+				const coalesce = isTyping && textHistory.lastWasTyping
+					&& now - textHistory.lastTime < textHistory.COALESCE_MS
+					&& textHistory.index >= 1; // never fold into the baseline entry
+
+				textHistory.entries.length = textHistory.index + 1; // drop the redo tail
+				if (coalesce) {
+					textHistory.entries[textHistory.index] = { text, cursor };
+				} else {
+					textHistory.entries.push({ text, cursor });
+					textHistory.index = textHistory.entries.length - 1;
+					if (textHistory.entries.length > textHistory.MAX) {
+						textHistory.entries.shift();
+						textHistory.index--;
+					}
+				}
+				textHistory.lastTime = now;
+				textHistory.lastWasTyping = isTyping;
+				findBar?.syncButtons();
+			};
+
+			const historyApply = (entry) => {
+				textHistory.applying = true;
+				try {
+					setWidgetText(entry.text);
+					clearExecutionHighlights();
+					invalidateWildcardValidation();
+					updateEditorContent();
+					editor.focus();
+					setPlainCursorPosition(editor, Math.min(entry.cursor ?? 0, entry.text.length));
+				} finally {
+					textHistory.applying = false;
+				}
+				textHistory.lastWasTyping = false;
+				findBar?.syncButtons();
+			};
+
+			const canUndo = () => textHistory.index > 0;
+			const canRedo = () => textHistory.index < textHistory.entries.length - 1;
+			const historyUndo = () => {
+				if (!canUndo()) return;
+				textHistory.index--;
+				historyApply(textHistory.entries[textHistory.index]);
+			};
+			const historyRedo = () => {
+				if (!canRedo()) return;
+				textHistory.index++;
+				historyApply(textHistory.entries[textHistory.index]);
+			};
+
+			// Single choke point for programmatic text changes (find & replace, ...)
+			const applyTextChange = (newText, cursor) => {
+				setWidgetText(fixCommentBody(newText));
+				clearExecutionHighlights();
+				invalidateWildcardValidation();
+				updateEditorContent();
+				historyRecord(prompt_widget.value, cursor, false);
+			};
+
+			historyReset();
 
 			// Re-highlight when in1..in4 sockets connect/disconnect so <in1> validity updates
 			const origOnConnectionsChange = this.onConnectionsChange;
@@ -962,9 +1078,20 @@ app.registerExtension({
             // if the value is ever changed externally (e.g., via a Load function)
 			const originalPromptCallback = prompt_widget.callback;
             prompt_widget.callback = (...args) => {
-				clearExecutionHighlights();
-				invalidateWildcardValidation();
-				updateEditorContent();
+				const value = prompt_widget.value || "";
+				// ComfyUI fires this on EVERY value assignment, ours included - own writes
+				// carry knownText and must not touch the history.
+				if (value !== textHistory.knownText) {
+					clearExecutionHighlights();
+					invalidateWildcardValidation();
+					updateEditorContent();
+					if (textHistory.baselinePending) {
+						historyReset(value); // text injected while loading a workflow = new baseline
+					} else {
+						historyRecord(value, 0, false); // later external change stays undoable
+					}
+					textHistory.knownText = value;
+				}
 				originalPromptCallback?.apply(prompt_widget, args);
 			};
 			
@@ -981,16 +1108,63 @@ app.registerExtension({
 				autocomplete.hide();
 				autocompleteCtx = null;
 				const updatedText = plainText.substring(0, partialStart) + "<" + item.name + ">" + plainText.substring(cursorOffset);
-				prompt_widget.value = fixCommentBody(updatedText);
+				setWidgetText(fixCommentBody(updatedText));
 				clearExecutionHighlights();
 				invalidateWildcardValidation();
 				updateEditorContent();
 				setPlainCursorPosition(editor, partialStart + item.name.length + 2);
+				historyRecord(prompt_widget.value, partialStart + item.name.length + 2, false);
 			});
 			const hideAutocomplete = () => {
 				autocomplete.hide();
 				autocompleteCtx = null;
 			};
+
+			// --- FIND & REPLACE + UNDO/REDO TOOLBAR (CTRL+F / CTRL+H) ---------
+			findBar = new FindReplaceBar(editor, {
+				getText: () => getEditorPlainText(editor),
+				getCaret: () => getEditorSelectionState(editor)?.start ?? 0,
+				getSelectedText: () => {
+					const state = getEditorSelectionState(editor);
+					if (!state || state.isCollapsed) return "";
+					return getEditorPlainText(editor).substring(state.start, state.end);
+				},
+				getSelectionRange: () => {
+					// The last selection made in the editor, even after focus moved to the bar
+					const state = getEditorSelectionState(editor);
+					if (state && !state.isCollapsed) return [state.start, state.end];
+					const remembered = editor._silverLastSelection;
+					return remembered && remembered[1] > remembered[0] ? remembered : null;
+				},
+				createRange: (start, end) => createPlainRange(editor, start, end),
+				selectRange: (start, end) => setPlainSelectionRange(editor, start, end),
+				applyText: (text, cursor) => applyTextChange(text, cursor),
+				undo: historyUndo,
+				redo: historyRedo,
+				canUndo,
+				canRedo,
+			});
+			this._silverFindBar = findBar;
+
+			// CTRL+Click on a wildcard opens its .txt in this overlay editor
+			const wildcardEditor = new WildcardEditor();
+			this._silverWildcardEditor = wildcardEditor;
+
+			// The compact toolbar follows editor focus / hover; the open find panel stays put.
+			// Hover is also tracked on the DOM widget container so it appears anywhere over
+			// the node's editor area, and hiding is delayed so the cursor can reach the bar.
+			const trackHover = (element) => {
+				if (!element) return;
+				element.addEventListener("mouseenter", () => findBar.show());
+				element.addEventListener("mouseleave", () => {
+					if (document.activeElement !== editor) findBar.hideSoon();
+				});
+			};
+			editor.addEventListener("focus", () => findBar.show());
+			editor.addEventListener("blur", () => findBar.hideSoon(600));
+			trackHover(editor);
+			// The widget wrapper only exists once addDOMWidget ran - pick it up afterwards
+			setTimeout(() => trackHover(editor.parentElement), 0);
 
 			const updateAutocomplete = () => {
 				const sel = window.getSelection();
@@ -1034,6 +1208,33 @@ app.registerExtension({
 
                 e.stopPropagation();
 
+				// Own undo/redo: the native one is dead because every edit rewrites innerHTML
+				if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+					const key = e.key.toLowerCase();
+					if (key === 'z') {
+						e.preventDefault();
+						e.shiftKey ? historyRedo() : historyUndo();
+						return;
+					}
+					if (key === 'y') {
+						e.preventDefault();
+						historyRedo();
+						return;
+					}
+					if (key === 'f' || key === 'h') {
+						e.preventDefault();
+						hideAutocomplete();
+						findBar.openFind(key === 'h');
+						return;
+					}
+				}
+
+				if (e.key === 'Escape' && findBar.open) {
+					e.preventDefault();
+					findBar.close();
+					return;
+				}
+
 				// While the autocomplete dropdown is open, it owns navigation/confirm keys
 				if (autocomplete.isOpen) {
 					if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1067,14 +1268,15 @@ app.registerExtension({
 							plainText = plainText.substring(0, plainOffset) + indentation + plainText.substring(plainOffset);
 							
 							const fixed_text = fixCommentBody(plainText);
-							prompt_widget.value = fixed_text;  // Update ComfyUI widget
+							setWidgetText(fixed_text);  // Update ComfyUI widget
 							clearExecutionHighlights();
 							invalidateWildcardValidation();
 							
 							updateEditorContent(); // Re-highlight (this calls editor.innerHTML = highlight(text);)
 					
 					// Set cursor to the position after the inserted characters
-					setPlainCursorPosition(editor, plainOffset + indentation.length); 
+					setPlainCursorPosition(editor, plainOffset + indentation.length);
+					historyRecord(prompt_widget.value, plainOffset + indentation.length, false);
 				}
 				
             });
@@ -1094,13 +1296,14 @@ app.registerExtension({
                     plainText = plainText.substring(0, plainOffset) + "\n" + plainText.substring(plainOffset);
 					
 						const fixed_text = fixCommentBody(plainText);
-						prompt_widget.value = fixed_text;  // Update ComfyUI widget
+						setWidgetText(fixed_text);  // Update ComfyUI widget
 						clearExecutionHighlights();
 						invalidateWildcardValidation();
 						
 	                    updateEditorContent(); // Re-highlight
-                    
+
                     setPlainCursorPosition(editor, plainOffset + 1);
+                    historyRecord(prompt_widget.value, plainOffset + 1, false);
                 }
             });
 
@@ -1113,13 +1316,16 @@ app.registerExtension({
 				const plainText = getEditorPlainText(editor);
 				
 					const fixed_text = fixCommentBody(plainText);
-					prompt_widget.value = fixed_text;  // Update ComfyUI widget
+					setWidgetText(fixed_text);  // Update ComfyUI widget
 					clearExecutionHighlights();
 					invalidateWildcardValidation();
 	                
 	                updateEditorContent(); // Re-highlight
 
                 setPlainCursorPosition(editor, plainOffset);
+                // Group a typed word into one undo step; whitespace/punctuation ends the group
+                const typedChar = (prompt_widget.value || "").charAt(plainOffset - 1);
+                historyRecord(prompt_widget.value, plainOffset, /[^\s.,;:!?()[\]{}|<>#=]/.test(typedChar));
                 updateAutocomplete();
             });
 
@@ -1137,17 +1343,28 @@ app.registerExtension({
 				const plainText = getEditorPlainText(editor);
 					const updatedText = plainText.substring(0, start) + clipboardText + plainText.substring(end);
 					const fixed_text = fixCommentBody(updatedText);
-					prompt_widget.value = fixed_text;
+					setWidgetText(fixed_text);
 					clearExecutionHighlights();
 					invalidateWildcardValidation();
 
 				updateEditorContent();
 				setPlainCursorPosition(editor, start + clipboardText.length);
+				historyRecord(prompt_widget.value, start + clipboardText.length, false);
 			});
 			
+			// Remember the last real selection: focusing the find bar clears the DOM
+			// selection, but "search inside the selection" still needs that range.
+			const rememberSelection = () => {
+				const state = getEditorSelectionState(editor);
+				if (state && !state.isCollapsed) editor._silverLastSelection = [state.start, state.end];
+			};
+			editor.addEventListener("mouseup", rememberSelection);
+			editor.addEventListener("keyup", rememberSelection);
+
 			// --- Ensure the element is truly deselected on leaving focus ---
 			editor.addEventListener('blur', () => {
 				hideAutocomplete();
+				rememberSelection();
 				const sel = window.getSelection();
 				// Crucial: remove any active selection ranges from the contentEditable element
 				if (sel.rangeCount > 0) {
@@ -1188,21 +1405,13 @@ app.registerExtension({
 						const wildcardFileName = hovered_wildcard_content.toLowerCase().endsWith(".txt") ? hovered_wildcard_content : `${hovered_wildcard_content}.txt`;
 						const baseDir = (current_wildcard_directory || "").replace(/[\\/]+$/, "");
 						const wildcard_file_path = baseDir ? `${baseDir}/${wildcardFileName}` : wildcardFileName;
-						fetch("/valitools/quick_open_wildcard", {
-							method: "POST",
-							headers: {
-								"Content-Type": "application/json",
-							},
-							body: JSON.stringify({ file_path: wildcard_file_path, wildcard_dir: current_wildcard_directory })
-						}).then(async (response) => {
-							if (!response.ok) return;
+						// Edit the .txt in ComfyUI itself - handing the path to the OS file
+						// handler would be a system call (and never works on remote installs)
+						wildcardEditor.open(wildcard_file_path, current_wildcard_directory, hovered_wildcard_content, async () => {
 							await get_wildcard_files();
 							invalidateWildcardValidation();
 							updateEditorContent();
-						}).catch((e) => {
-							console.warn("[VSmartPrompt] quick_open_wildcard error:", e);
 						});
-
 					}
 				}
 			});
@@ -1455,11 +1664,12 @@ app.registerExtension({
 				handleCopy(e);
 				if (!state || state.isCollapsed) return;
 				const text = getEditorPlainText(editor);
-				prompt_widget.value = fixCommentBody(text.substring(0, state.start) + text.substring(state.end));
+				setWidgetText(fixCommentBody(text.substring(0, state.start) + text.substring(state.end)));
 				clearExecutionHighlights();
 				invalidateWildcardValidation();
 				updateEditorContent();
 				setPlainCursorPosition(editor, state.start);
+				historyRecord(prompt_widget.value, state.start, false);
 			});
 			
 			
@@ -1505,7 +1715,7 @@ app.registerExtension({
 				}
 			
 				// Use the attached references
-				this.prompt_widget.value = text.substring(0, start) + newText + text.substring(end);
+				this.silverSetWidgetText(text.substring(0, start) + newText + text.substring(end));
 				if (typeof this.clearExecutionHighlights === "function") {
 					this.clearExecutionHighlights();
 				}
@@ -1514,7 +1724,10 @@ app.registerExtension({
 				}
 				this.updateEditorContent();
 				this.setPlainSelectionRange(this, start, start + newText.length);
+				this.silverRecordHistory?.(this.prompt_widget.value, start + newText.length, true);
 			};
+			editor.silverRecordHistory = historyRecord;
+			editor.silverSetWidgetText = setWidgetText;
 
 			const executedListener = (event) => {
 				const detail = event?.detail;
@@ -1574,6 +1787,10 @@ app.registerExtension({
 				origOnRemoved?.apply(this, arguments);
                 editor.remove();
                 autocomplete.cleanup();
+				this._silverFindBar?.cleanup();
+				this._silverFindBar = null;
+				this._silverWildcardEditor?.cleanup();
+				this._silverWildcardEditor = null;
 				if (this._silverExecutedListener) {
 					api.removeEventListener("executed", this._silverExecutedListener);
 					this._silverExecutedListener = null;

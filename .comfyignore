@@ -1,0 +1,4 @@
+# Extra files kept out of the published registry package (gitignore syntax).
+# Note: imgs/ stays IN - the README on the registry page references those images.
+*.zip
+tests/

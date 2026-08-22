@@ -7,8 +7,6 @@ from pathlib import Path
 from aiohttp import web
 from server import PromptServer
 
-import subprocess
-
 
 WILDCARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wildcards')
 LEGACY_WILDCARD_DIR_SUFFIX = "/comfyui-richtext_basicdynamicprompts/wildcards"
@@ -1208,8 +1206,8 @@ def dynamic_prompts(
 
         # Process wildcards recursively (NO _fix_prompt call here)
         if has_wildcards:
-            max_subprocess_count = 10
-            while max_subprocess_count > 0:
+            max_inner_pass_count = 10
+            while max_inner_pass_count > 0:
                 if "__" in prompt:
                     if source_map is None:
                         prompt = _process_wildcards(prompt, wildcard_dir, seed)
@@ -1217,12 +1215,12 @@ def dynamic_prompts(
                         prompt, source_map, wildcard_origin_map = _process_wildcards(prompt, wildcard_dir, seed, source_map, wildcard_origin_map)
                 else:
                     break
-                max_subprocess_count -= 1
+                max_inner_pass_count -= 1
 
         # Process combinations recursively (NO _fix_prompt call here)
         if has_combinations:
-            max_subprocess_count = 30
-            while max_subprocess_count > 0:
+            max_inner_pass_count = 30
+            while max_inner_pass_count > 0:
                 if "{" in prompt or "}" in prompt:
                     if source_map is None:
                         prompt = _process_combinations(prompt, seed)
@@ -1230,7 +1228,7 @@ def dynamic_prompts(
                         prompt, source_map, wildcard_origin_map = _process_combinations(prompt, seed, source_map, wildcard_origin_map)
                 else:
                     break
-                max_subprocess_count -= 1
+                max_inner_pass_count -= 1
 
         # Capture bare 'word==<name>' assignments (outside any braces) between passes
         # so switcher guards can see branch-inner tags on the next pass.
@@ -1491,53 +1489,95 @@ async def validate_wildcards(request):
     return web.json_response({"existing_wildcards": existing_wildcards})
 
 
-@PromptServer.instance.routes.post("/valitools/quick_open_wildcard")
-async def quick_open_wildcard(request):
+def _resolve_editable_wildcard_path(data) -> tuple[str | None, str | None]:
+    """
+    Validates a wildcard file path coming from the browser.
+    Returns (absolute_path, None) or (None, error_message). Only '.txt' files inside
+    the node's wildcard directory are ever accepted.
+    """
+    file_path = data.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None, "No wildcard file path provided"
+
+    file_path = os.path.normpath(file_path.replace("\\", os.sep).replace("/", os.sep))
+    if not file_path.lower().endswith(".txt"):
+        return None, "Only .txt files can be edited"
+
+    wildcard_dir = normalize_wildcard_directory(data.get("wildcard_dir") or "")
+    if not wildcard_dir:
+        return None, "No wildcard directory configured"
+
+    try:
+        resolved_dir = Path(wildcard_dir).resolve()
+        resolved_file = Path(file_path).resolve()
+        if not resolved_file.is_relative_to(resolved_dir):
+            return None, "Access denied: path outside wildcard directory"
+    except (OSError, ValueError):
+        return None, "Invalid file path"
+
+    return str(resolved_file), None
+
+
+@PromptServer.instance.routes.post("/valitools/read_wildcard")
+async def read_wildcard(request):
+    """Returns the contents of a wildcard file, creating an empty one if missing."""
     try:
         try:
             data = await request.json()
         except Exception:
             return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
 
-        file_path = data.get("file_path")
-        if isinstance(file_path, str):
-            file_path = os.path.normpath(file_path.replace("\\", os.sep).replace("/", os.sep))
-
-        if not file_path:
-            return web.json_response({"success": False, "error": "No wildcard file path provided"})
-
-        if not file_path.lower().endswith(".txt"):
-            return web.json_response({"success": False, "error": "Only .txt files can be opened"})
-
-        wildcard_dir = normalize_wildcard_directory(data.get("wildcard_dir") or "")
-        if wildcard_dir:
-            try:
-                resolved_file = Path(file_path).resolve()
-                resolved_dir = Path(wildcard_dir).resolve()
-                if not resolved_file.is_relative_to(resolved_dir):
-                    return web.json_response({"success": False, "error": "Access denied: path outside wildcard directory"})
-            except (OSError, ValueError):
-                return web.json_response({"success": False, "error": "Invalid file path"})
+        file_path, error = _resolve_editable_wildcard_path(data)
+        if error:
+            return web.json_response({"success": False, "error": error})
 
         parent_dir = os.path.dirname(file_path)
         if parent_dir and not os.path.exists(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
 
-        if not os.path.exists(file_path):
+        created = not os.path.exists(file_path)
+        if created:
             with open(file_path, "a", encoding="utf-8"):
                 pass
 
-        if os.name == 'nt': # Windows
-            os.startfile(file_path)
-        elif os.uname().sysname == 'Darwin': # macOS
-            subprocess.call(('open', file_path))
-        else: # Linux and others
-            subprocess.call(('xdg-open', file_path))
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        return web.json_response({"success": True, "content": content, "created": created, "file_path": file_path})
+
+    except Exception as e:
+        print(f"[VSmartPrompt] Error in read_wildcard: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@PromptServer.instance.routes.post("/valitools/save_wildcard")
+async def save_wildcard(request):
+    """Writes a wildcard file edited in the node's built-in wildcard editor."""
+    try:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
+
+        file_path, error = _resolve_editable_wildcard_path(data)
+        if error:
+            return web.json_response({"success": False, "error": error})
+
+        content = data.get("content")
+        if not isinstance(content, str):
+            return web.json_response({"success": False, "error": "No content provided"})
+
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+
+        with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
 
         return web.json_response({"success": True})
 
     except Exception as e:
-        print(f"Error in quick_open_wildcard: {e}")
+        print(f"[VSmartPrompt] Error in save_wildcard: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 NODE_CLASS_MAPPINGS = {
