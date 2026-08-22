@@ -70,6 +70,7 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 # For a fixed MULTI-WORD text use a single-choice combination: {crime scene}==<loc>
 # SILENT assignment: '==!<name>' stores the value but outputs NOTHING where it stands - only the <name> references output it.
 # NODE INPUTS: text connected to the in1..in4 input sockets is available here as <in1>..<in4> - chain VSmartPrompt nodes by wiring one's output into another's socket.
+# VARIABLE HAND-OVER: wire a node's 'variables' output into the next node's 'vars_in' input and every <name> it assigned works there too (and travels on down the chain).
 # TIP: typing '<' opens a dropdown with all assigned variables - type to filter, UP/DOWN + ENTER/TAB or click to insert, ESC to close.
 
     {blonde|ginger}==<haircolor> hair            # picks one AND remembers the pick
@@ -1343,11 +1344,13 @@ class VSmartPrompt:
                 "in2": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in2>. Inserted as-is (not re-resolved). The upstream branch only executes if <in2> appears in the prompt."}),
                 "in3": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in3>. Inserted as-is (not re-resolved). The upstream branch only executes if <in3> appears in the prompt."}),
                 "in4": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in4>. Inserted as-is (not re-resolved). The upstream branch only executes if <in4> appears in the prompt."}),
+                "vars_in": ("VS_VARS", {"tooltip": "Variables from another VSmartPrompt: wire its 'variables' output here and every <name> it assigned is available in this prompt (and is passed on again)."}),
             },
         }
 
-    RETURN_TYPES = ("STRING","STRING",)
-    RETURN_NAMES = ("prompt", "original_prompt",)
+    # 'variables' is appended so the existing output slot indexes stay untouched.
+    RETURN_TYPES = ("STRING","STRING","VS_VARS",)
+    RETURN_NAMES = ("prompt", "original_prompt", "variables",)
     FUNCTION = "main"
     CATEGORY = "ValiTools"
     DESCRIPTION = """
@@ -1392,10 +1395,21 @@ wildcard_directory: The directory where TXT wildcard files are stored.
         remove_empty_tags = True
         wildcard_directory = normalize_wildcard_directory(wildcard_directory)
 
-        # Mix connected input texts into the effective seed: when an upstream node's
-        # output changes, this node's combination/wildcard picks re-roll too - even
-        # with a fixed seed widget. Same seed + same inputs stays fully reproducible.
-        connected_inputs = "\x1f".join(f"{name}={value}" for name, value in (("in1", in1), ("in2", in2), ("in3", in3), ("in4", in4)) if value is not None)
+        # Variables handed over by an upstream VSmartPrompt through 'vars_in'. They
+        # act like assignments that already happened, so this prompt can reference
+        # them - and a local assignment to the same name still wins (last one wins).
+        inherited_variables = kwargs.get("vars_in")
+        preset_variables = {}
+        if isinstance(inherited_variables, dict):
+            preset_variables.update({str(k).lower(): str(v) for k, v in inherited_variables.items() if v is not None})
+        preset_variables.update({"in1": in1, "in2": in2, "in3": in3, "in4": in4})
+
+        # Mix connected inputs into the effective seed: when an upstream node's output
+        # changes, this node's combination/wildcard picks re-roll too - even with a
+        # fixed seed widget. Same seed + same inputs stays fully reproducible.
+        connected_inputs = "\x1f".join(
+            f"{name}={value}" for name, value in sorted(preset_variables.items()) if value is not None
+        )
         if connected_inputs:
             input_digest = int.from_bytes(hashlib.sha256(connected_inputs.encode("utf-8")).digest()[:8], "big")
             seed = (seed ^ input_digest) & 0xffffffffffffffff
@@ -1409,7 +1423,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
             remove_empty_tags=remove_empty_tags,
             wildcard_dir=wildcard_directory,
             return_trace=True,
-            preset_variables={"in1": in1, "in2": in2, "in3": in3, "in4": in4},
+            preset_variables=preset_variables,
         )
 
         if remove_loras_pattern:
@@ -1419,13 +1433,21 @@ wildcard_directory: The directory where TXT wildcard files are stored.
             if remove_whitespaces or remove_empty_tags:
                 dp = dynamic_prompts(prompt=dp, seed=seed, line_suffix=line_suffix, single_line_output=single_line_output, remove_whitespaces=remove_whitespaces, remove_empty_tags=remove_empty_tags, wildcard_dir=wildcard_directory)
         
+        # Everything this prompt knows travels on: inherited variables plus the ones
+        # assigned here. The in1..in4 socket names are dropped - the next node has its
+        # own sockets and '<in1>' there must mean ITS input, not this node's.
+        outgoing_variables = {
+            name: value for name, value in variable_values.items()
+            if name not in self.INPUT_SOCKET_NAMES
+        }
+
         return {
             "ui": {
                 "selected_ranges": selected_ranges,
                 "wildcard_resolutions": wildcard_resolutions,
                 "variable_values": [variable_values],
             },
-            "result": (dp, prompt),
+            "result": (dp, prompt, outgoing_variables),
         }
 @PromptServer.instance.routes.post("/valitools/get_wildcard_files")
 async def get_wildcard_files(request):

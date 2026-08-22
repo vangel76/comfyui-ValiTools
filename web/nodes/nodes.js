@@ -148,8 +148,11 @@ app.registerExtension({
 			let work = applySelectedRangeMarkers(text, selectedRanges);
 
 			// Variable names assigned anywhere in the text (references to them highlight as valid),
-			// plus externally provided ones (connected in1..in4 input sockets)
+			// plus externally provided ones (connected in1..in4 sockets) and everything the
+			// last run knew - that is how variables handed over through 'vars_in' become
+			// valid here, since their names cannot be known before the first execution.
 			const definedVariables = new Set(externalVariables);
+			for (const name of Object.keys(variableValues || {})) definedVariables.add(name.toLowerCase());
 			VARIABLE_ASSIGN_SCAN_REGEX.lastIndex = 0;
 			let variableAssignMatch;
 			while ((variableAssignMatch = VARIABLE_ASSIGN_SCAN_REGEX.exec(text)) !== null) {
@@ -1180,6 +1183,12 @@ app.registerExtension({
 				const vars = new Map();
 				for (const name of getConnectedInputVars(this)) {
 					vars.set(name, { name, preview: "input socket" });
+				}
+				// Variables handed over through 'vars_in' (known after the first run)
+				for (const [name, value] of Object.entries(this._silverVariableValues || {})) {
+					if (vars.has(name)) continue;
+					const preview = String(value).length > 32 ? `${String(value).substring(0, 31)}…` : String(value);
+					vars.set(name, { name, preview });
 				}
 				VARIABLE_ASSIGN_PREVIEW_REGEX.lastIndex = 0;
 				let m;
