@@ -12,7 +12,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); typing `__` opens an autocomplete dropdown of the existing wildcard files; CTRL+Click opens or creates the file in a built-in editor (works on remote installs too)
 - **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
-- **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
+- **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. The `⎘` button copies the whole prompt as plain text. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Variable hand-over**: wire a node's `variables` output into the next node's `vars_in` input and every `<name>` it assigned works there too - references, switcher conditions and all. Inherited variables travel on down the chain; a local assignment to the same name wins
@@ -70,6 +70,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.12.1
+  - VSmartPrompt: copying is guaranteed plain text - the handler no longer falls through to the browser's default (which would copy the highlighting HTML) when the selection cannot be mapped, and it explicitly clears the rich-text flavour. New `⎘` toolbar button copies the entire prompt as plain text
 - v1.12.0
   - VSmartPrompt: typing `__` opens a dropdown of the existing wildcard files, just like `<` does for variables - filters as you type (substring match, prefix matches first), UP/DOWN + ENTER/TAB or click inserts `__name__`. Only offered while a `__` is actually open, so a finished `__wildcard__` no longer triggers it
 - v1.11.0

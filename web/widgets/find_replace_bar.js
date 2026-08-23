@@ -115,6 +115,7 @@ export class FindReplaceBar {
 		this.undoButton = this._button("↶", "Undo (CTRL+Z)", () => this.api.undo());
 		this.redoButton = this._button("↷", "Redo (CTRL+SHIFT+Z)", () => this.api.redo());
 		this.findButton = this._button("⌕", "Find & replace (CTRL+F)", () => this.openFind(false));
+		this.copyButton = this._button("⎘", "Copy the whole prompt as plain text", () => this.copyAll());
 
 		this.panel = document.createElement("div");
 		Object.assign(this.panel.style, { display: "none", alignItems: "center", gap: "4px" });
@@ -180,7 +181,7 @@ export class FindReplaceBar {
 			this._button("✕", "Close (ESC)", () => this.close()),
 		);
 
-		this.element.append(this.undoButton, this.redoButton, this.findButton, this.panel);
+		this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, this.panel);
 		document.body.appendChild(this.element);
 	}
 
@@ -431,6 +432,26 @@ export class FindReplaceBar {
 		this.api.applyText(result, Math.min(result.length, this.matches[0][0] + replacement.length));
 		this._search({ keepActive: false });
 		this.counter.textContent = `${count} replaced`;
+	}
+
+	/** Puts the entire prompt on the clipboard as plain text, no markup of any kind. */
+	async copyAll() {
+		const text = this.api.getText();
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			// Clipboard API needs a secure context; fall back to a scratch textarea
+			const scratch = document.createElement("textarea");
+			scratch.value = text;
+			scratch.style.cssText = "position:fixed; opacity:0; pointer-events:none;";
+			document.body.appendChild(scratch);
+			scratch.select();
+			try { document.execCommand("copy"); } catch { /* nothing else we can do */ }
+			scratch.remove();
+		}
+		const previous = this.copyButton.textContent;
+		this.copyButton.textContent = "✓";
+		setTimeout(() => { this.copyButton.textContent = previous; }, 900);
 	}
 
 	cleanup() {

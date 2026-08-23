@@ -1713,10 +1713,17 @@ app.registerExtension({
 			// markdown-aware paste targets turn the bold spans into '**...**'.
 			const handleCopy = (e) => {
 				e.stopPropagation();
+				if (!e.clipboardData) return;
 				const state = getEditorSelectionState(editor);
-				if (!state || state.isCollapsed || !e.clipboardData) return;
-				const plain = getEditorPlainText(editor).substring(state.start, state.end);
+				// Offset mapping can fail on odd selections (triple click, selection anchored
+				// on an element node). Falling through would let the browser copy the
+				// highlighting HTML, so use the raw selection string as a fallback.
+				const plain = (state && !state.isCollapsed)
+					? getEditorPlainText(editor).substring(state.start, state.end)
+					: (window.getSelection()?.toString() ?? "");
+				if (!plain) return;
 				e.clipboardData.setData("text/plain", plain);
+				e.clipboardData.setData("text/html", "");  // never offer a rich flavour
 				e.preventDefault();
 			};
 			editor.addEventListener("copy", handleCopy);
