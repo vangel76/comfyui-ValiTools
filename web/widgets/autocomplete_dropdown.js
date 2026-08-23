@@ -47,8 +47,10 @@ export class AutocompleteDropdown {
       });
 
       const name = document.createElement('span');
-      name.textContent = `<${item.name}>`;
-      name.style.cssText = 'color:#DA70D6; font-weight:bold;';
+      // 'display' / 'color' let the same dropdown serve variables (<name>) and
+      // wildcards (__name__); without them it keeps the original variable look.
+      name.textContent = item.display ?? `<${item.name}>`;
+      name.style.cssText = `color:${item.color ?? '#DA70D6'}; font-weight:bold;`;
       row.appendChild(name);
 
       if (item.preview) {

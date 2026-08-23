@@ -121,6 +121,10 @@ app.registerExtension({
 		// partial reference being typed directly before the cursor ('<', '<ha', ...).
 		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_PARTIAL_REGEX = /<([A-Za-z0-9_]*)$/;
+		// Characters a wildcard name being typed may contain. The opening '__' itself
+		// is located with lastIndexOf - a regex would match the leftmost '__' on the
+		// line and swallow everything after it.
+		const WILDCARD_PARTIAL_REGEX = /^[^\n|{}<>]*$/;
 		// Switcher guard '<name>==value::' / '<name>!=value::' glued to a '{...}'
 		// block or '__wildcard__'. Must stay in sync with GUARD_*_PATTERN in nodes.py.
 		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*(?:==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
@@ -1107,16 +1111,18 @@ app.registerExtension({
 			let autocompleteCtx = null;
 			const autocomplete = new AutocompleteDropdown((item) => {
 				if (!autocompleteCtx) return;
-				const { partialStart, cursorOffset, plainText } = autocompleteCtx;
+				const { partialStart, cursorOffset, plainText, kind } = autocompleteCtx;
 				autocomplete.hide();
 				autocompleteCtx = null;
-				const updatedText = plainText.substring(0, partialStart) + "<" + item.name + ">" + plainText.substring(cursorOffset);
+				const inserted = kind === "wildcard" ? `__${item.name}__` : `<${item.name}>`;
+				const updatedText = plainText.substring(0, partialStart) + inserted + plainText.substring(cursorOffset);
 				setWidgetText(fixCommentBody(updatedText));
 				clearExecutionHighlights();
 				invalidateWildcardValidation();
 				updateEditorContent();
-				setPlainCursorPosition(editor, partialStart + item.name.length + 2);
-				historyRecord(prompt_widget.value, partialStart + item.name.length + 2, false);
+				const caret = partialStart + inserted.length;
+				setPlainCursorPosition(editor, caret);
+				historyRecord(prompt_widget.value, caret, false);
 			});
 			const hideAutocomplete = () => {
 				autocomplete.hide();
@@ -1175,7 +1181,53 @@ app.registerExtension({
 
 				const cursorOffset = getPlainCursorPosition(editor, sel);
 				const plainText = getEditorPlainText(editor);
-				const partialMatch = plainText.substring(0, cursorOffset).match(VARIABLE_PARTIAL_REGEX);
+				const before = plainText.substring(0, cursorOffset);
+
+				// --- wildcards: an ODD number of '__' on the line means one is still open ---
+				const lineStart = before.lastIndexOf("\n") + 1;
+				const line = before.substring(lineStart);
+				const openWildcard = ((line.match(/__/g) || []).length % 2) === 1;
+				if (openWildcard) {
+					const openIndex = line.lastIndexOf("__");
+					const typed = line.substring(openIndex + 2);
+					if (WILDCARD_PARTIAL_REGEX.test(typed)) {
+						const wildcardPartial = typed.toLowerCase();
+						const seen = new Set();
+						const wildcardItems = [];
+						for (const entry of wildcard_files || []) {
+							const name = String(entry);
+							if (name.toLowerCase().endsWith(".txt")) continue; // every file is listed twice
+							if (seen.has(name)) continue;
+							seen.add(name);
+							if (!name.toLowerCase().includes(wildcardPartial)) continue;
+							wildcardItems.push({ name, display: `__${name}__`, color: "#FFD700" });
+						}
+						if (wildcardItems.length === 0) return hideAutocomplete();
+						// exact prefix matches first, then the rest
+						wildcardItems.sort((a, b) => {
+							const ap = a.name.toLowerCase().startsWith(wildcardPartial) ? 0 : 1;
+							const bp = b.name.toLowerCase().startsWith(wildcardPartial) ? 0 : 1;
+							return ap - bp || a.name.localeCompare(b.name);
+						});
+
+						const wcRect = sel.getRangeAt(0).getBoundingClientRect();
+						const wcEditorRect = editor.getBoundingClientRect();
+						autocompleteCtx = {
+							kind: "wildcard",
+							partialStart: cursorOffset - wildcardPartial.length - 2, // include the '__'
+							cursorOffset,
+							plainText,
+						};
+						autocomplete.show(
+							wildcardItems.slice(0, 50),
+							wcRect.left || wcEditorRect.left,
+							(wcRect.bottom || wcEditorRect.top) + 2,
+						);
+						return;
+					}
+				}
+
+				const partialMatch = before.match(VARIABLE_PARTIAL_REGEX);
 				if (!partialMatch) return hideAutocomplete();
 				const partial = partialMatch[1].toLowerCase();
 
@@ -1204,7 +1256,7 @@ app.registerExtension({
 				const editorRect = editor.getBoundingClientRect();
 				const x = caretRect.left || editorRect.left;
 				const y = (caretRect.bottom || editorRect.top) + 2;
-				autocompleteCtx = { partialStart: cursorOffset - partial.length - 1, cursorOffset, plainText };
+				autocompleteCtx = { kind: "variable", partialStart: cursorOffset - partial.length - 1, cursorOffset, plainText };
 				autocomplete.show(items, x, y);
 			};
 

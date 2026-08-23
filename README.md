@@ -9,7 +9,7 @@ A collection of ComfyUI custom nodes. More tools will be added over time.
 A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 
 - **Combinations**: `{a|b}` with optional `N::` weights, nested at will, per-level coloring
-- **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); CTRL+Click opens or creates the file in a built-in editor (works on remote installs too)
+- **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); typing `__` opens an autocomplete dropdown of the existing wildcard files; CTRL+Click opens or creates the file in a built-in editor (works on remote installs too)
 - **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
 - **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
@@ -70,6 +70,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.12.0
+  - VSmartPrompt: typing `__` opens a dropdown of the existing wildcard files, just like `<` does for variables - filters as you type (substring match, prefix matches first), UP/DOWN + ENTER/TAB or click inserts `__name__`. Only offered while a `__` is actually open, so a finished `__wildcard__` no longer triggers it
 - v1.11.0
   - VSmartPrompt: variables can be handed from node to node - new `variables` output and `vars_in` input. Everything a prompt assigned (including what it inherited itself) is available in the next node as a normal `<name>`, works with switcher conditions, and a local assignment to the same name still wins. The `in1`-`in4` socket names are deliberately not passed on. Changed inherited values re-roll the downstream picks even with a fixed seed
 - v1.10.0
