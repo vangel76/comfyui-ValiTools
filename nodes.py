@@ -463,6 +463,15 @@ def dynamic_prompts(
             if value is not None
         })
 
+    # Assignments of blocks that sit INSIDE another, not yet resolved block are parked
+    # here instead of being applied: their branch may never be selected. The text keeps
+    # only an index marker, so the parked value can never be split by a '|' or eaten by
+    # a comment while it travels with its branch. Markers inside a discarded branch die
+    # with it; markers that survive are committed once they are no longer nested.
+    pending_assignments: list[tuple[str, bool, str]] = []
+    PENDING_OPEN, PENDING_CLOSE = "\ue010", "\ue011"
+    PENDING_PATTERN = re.compile(PENDING_OPEN + r"(\d+)" + PENDING_CLOSE)
+
     def _match_guard_before(text: str, construct_start: int) -> tuple[int, str, str, str] | None:
         """Returns (guard_start, var_name, operator, wanted_value) for a
         '<name>==value::' / '<name>!=value::' prefix glued to the construct at
@@ -517,6 +526,53 @@ def dynamic_prompts(
                 result_wildcard_map.extend(text_wildcard_map[last_index:start])
                 result_wildcard_map.extend([None] * len(value))
             last_index = end
+
+        result_parts.append(text[last_index:])
+        if result_source_map is not None:
+            result_source_map.extend(text_source_map[last_index:])
+        if result_wildcard_map is not None:
+            result_wildcard_map.extend(text_wildcard_map[last_index:])
+
+        updated_text = "".join(result_parts)
+        if text_source_map is None:
+            return updated_text
+        return updated_text, result_source_map, result_wildcard_map
+
+    def _commit_pending_assignments(
+        text: str,
+        text_source_map: list[int | None] | None = None,
+        text_wildcard_map: list[int | None] | None = None,
+        only_unbraced: bool = True,
+    ) -> str | tuple[str, list[int | None] | None, list[int | None] | None]:
+        """
+        Applies parked block assignments whose marker is no longer inside an unresolved
+        '{...}', and puts their value back into the text (nothing for a silent one).
+        """
+        result_parts: list[str] = []
+        result_source_map: list[int | None] | None = [] if text_source_map is not None else None
+        result_wildcard_map: list[int | None] | None = [] if text_wildcard_map is not None else None
+        last_index = 0
+
+        for match in PENDING_PATTERN.finditer(text):
+            if only_unbraced and (text.count("{", 0, match.start()) - text.count("}", 0, match.start())) > 0:
+                continue  # still inside a branch that may yet be discarded
+
+            name, silent, value = pending_assignments[int(match.group(1))]
+            variables[name] = value
+            emitted = "" if silent else value
+
+            result_parts.append(text[last_index:match.start()])
+            result_parts.append(emitted)
+            if result_source_map is not None:
+                result_source_map.extend(text_source_map[last_index:match.start()])
+                result_source_map.extend([None] * len(emitted))
+            if result_wildcard_map is not None:
+                result_wildcard_map.extend(text_wildcard_map[last_index:match.start()])
+                # Carry the marker's wildcard origin over so the resolved-line tooltip
+                # of a parked '__file__==<name>' survives.
+                marker_ids = [i for i in text_wildcard_map[match.start():match.end()] if i is not None]
+                result_wildcard_map.extend([marker_ids[0] if marker_ids else None] * len(emitted))
+            last_index = match.end()
 
         result_parts.append(text[last_index:])
         if result_source_map is not None:
@@ -827,6 +883,11 @@ def dynamic_prompts(
 
                 if variable_name:
                     chosen = _resolve_fragment(chosen)
+                    # Same rule as for blocks: inside a branch that may still be
+                    # discarded, park the assignment instead of applying it.
+                    if (prompt.count("{", 0, match.start()) - prompt.count("}", 0, match.start())) > 0:
+                        pending_assignments.append((variable_name.lower(), silent_assign, chosen))
+                        return f"{PENDING_OPEN}{len(pending_assignments) - 1}{PENDING_CLOSE}", True
                     variables[variable_name.lower()] = chosen
                     if silent_assign:
                         chosen = ""
@@ -1125,8 +1186,30 @@ def dynamic_prompts(
             assignment = VARIABLE_ASSIGN_PATTERN.match(prompt, end)
             if assignment:
                 resolved_value = _resolve_fragment(selected_choice)
-                variables[assignment.group(2).lower()] = resolved_value
                 end = assignment.end()
+
+                # Inside another, still unresolved block? Park the assignment: this branch
+                # may never be selected, and applying it now would let switcher guards and
+                # later references see a value from a discarded branch. The value is
+                # already rolled, so it stays constant wherever it ends up.
+                if (prompt.count("{", 0, start) - prompt.count("}", 0, start)) > 0:
+                    pending_assignments.append((assignment.group(2).lower(), assignment.group(1) is not None, resolved_value))
+                    marker = f"{PENDING_OPEN}{len(pending_assignments) - 1}{PENDING_CLOSE}"
+                    if prompt_source_map is not None:
+                        forced_source_indexes.update(i for i in (selected_choice_source_map or []) if i is not None)
+                        selected_choice_source_map = [None] * len(marker)
+                    if prompt_wildcard_map is not None:
+                        selected_choice_wildcard_map = [None] * len(marker)
+                    selected_choice = marker
+                    prompt = prompt[:replace_start] + selected_choice + prompt[end:]
+                    if prompt_source_map is not None:
+                        prompt_source_map = prompt_source_map[:replace_start] + selected_choice_source_map + prompt_source_map[end:]
+                    if prompt_wildcard_map is not None:
+                        prompt_wildcard_map = prompt_wildcard_map[:replace_start] + selected_choice_wildcard_map + prompt_wildcard_map[end:]
+                    search_offset = 0
+                    continue
+
+                variables[assignment.group(2).lower()] = resolved_value
                 if assignment.group(1) is not None:
                     # Silent assignment: emits nothing, but keep the chosen branch
                     # white-marked in the editor (its chars never reach the output).
@@ -1231,11 +1314,14 @@ def dynamic_prompts(
                     break
                 max_inner_pass_count -= 1
 
-        # Capture bare 'word==<name>' assignments (outside any braces) between passes
-        # so switcher guards can see branch-inner tags on the next pass.
+        # Commit parked block assignments that left their branch, then capture bare
+        # 'word==<name>' assignments (outside any braces), so switcher guards see the
+        # tags of the SELECTED branch on the next pass - and only those.
         if source_map is None:
+            prompt = _commit_pending_assignments(prompt)
             prompt = _capture_literal_assignments(prompt, only_unbraced=True)
         else:
+            prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map)
             prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=True)
 
         if (prompt, len(variables)) == iteration_snapshot:
@@ -1293,10 +1379,12 @@ def dynamic_prompts(
     # final substitution pass for all references (including ones that appeared before
     # their assignment).
     if source_map is None:
+        prompt = _commit_pending_assignments(prompt, only_unbraced=False)
         prompt = _capture_literal_assignments(prompt)
         prompt = _sweep_guards(prompt)
         prompt = _substitute_variables(prompt)
     else:
+        prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=False)
         prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map)
         prompt, source_map, wildcard_origin_map = _sweep_guards(prompt, source_map, wildcard_origin_map)
         prompt, source_map, wildcard_origin_map = _substitute_variables(prompt, source_map, wildcard_origin_map)

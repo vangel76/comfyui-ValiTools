@@ -70,6 +70,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.12.2
+  - VSmartPrompt: fixed switcher conditions reacting to a discarded branch. A `{...}==<name>` or `__file__==<name>` sitting INSIDE another block assigned its value as soon as it resolved - which happens innermost-first, before the outer block has even picked a branch. Guards further down then judged against a value from a branch that was never selected (`<shot>` read `upper chest` while `forehead` won). Such assignments are now parked and only applied once their branch has actually survived
 - v1.12.1
   - VSmartPrompt: copying is guaranteed plain text - the handler no longer falls through to the browser's default (which would copy the highlighting HTML) when the selection cannot be mapped, and it explicitly clears the rich-text flavour. New `⎘` toolbar button copies the entire prompt as plain text
 - v1.12.0
