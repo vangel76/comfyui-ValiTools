@@ -82,6 +82,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.14.2
+  - VWaitForVRAM: the node now also reads ComfyUI's own model bookkeeping (`current_loaded_models`), not just the torch allocator pool, when deciding how much of the occupied VRAM is its own - the pool alone can report far less than is actually held. Each run logs the breakdown (driver free / torch pool / ComfyUI models) to the console
 - v1.14.1
   - VWaitForVRAM: fixed the node blocking forever from the second render on. The driver's free value collapses once ComfyUI has a model resident, so the node waited for memory it was holding itself. VRAM used by this process now counts as available (`count_own_vram`, on by default) - the wait is for other processes, which is the point of the node
 - v1.14.0

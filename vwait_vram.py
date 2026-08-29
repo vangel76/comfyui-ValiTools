@@ -18,15 +18,42 @@ any_type = AnyType("*")
 BYTES_PER_GB = 1024 ** 3
 
 
-def _free_vram_gb(device_index: int, count_own_vram: bool = True) -> float | None:
+def _own_vram_bytes(device_index: int) -> tuple[int, int]:
+    """
+    VRAM this ComfyUI process holds on the device, as (torch allocator pool,
+    ComfyUI's own loaded models). Either number can undercount on its own, so the
+    caller takes the larger one.
+    """
+    try:
+        reserved = int(torch.cuda.memory_reserved(device_index))
+    except Exception:
+        reserved = 0
+
+    models = 0
+    try:
+        device = torch.device("cuda", device_index)
+        for loaded in getattr(model_management, "current_loaded_models", []):
+            if getattr(loaded, "device", None) != device:
+                continue
+            try:
+                models += int(loaded.model_loaded_memory())
+            except Exception:
+                continue
+    except Exception:
+        models = 0
+
+    return reserved, models
+
+
+def _free_vram_gb(device_index: int, count_own_vram: bool = True, verbose: bool = False) -> float | None:
     """
     Free VRAM in GB, or None when there is no CUDA device.
 
-    The driver's free value drops to almost nothing once ComfyUI has a model
-    resident, which would make this node block forever from the second render on.
-    So by default the memory THIS process holds is counted as available - ComfyUI
-    frees its own models when it needs room, and what we really want to wait for is
-    memory held by OTHER processes.
+    The driver's free value collapses once ComfyUI has a model resident, which would
+    make this node block forever from the second render on. So by default the memory
+    THIS process holds counts as available - ComfyUI frees its own models when it
+    needs room, and what we really want to wait for is memory held by OTHER
+    processes.
     """
     if not torch.cuda.is_available():
         return None
@@ -35,10 +62,17 @@ def _free_vram_gb(device_index: int, count_own_vram: bool = True) -> float | Non
             f"VWaitForVRAM: device_index {device_index} does not exist "
             f"({torch.cuda.device_count()} CUDA device(s) present)"
         )
+
     free_bytes, _total = torch.cuda.mem_get_info(device_index)
-    if count_own_vram:
-        free_bytes += torch.cuda.memory_reserved(device_index)
-    return free_bytes / BYTES_PER_GB
+    reserved, models = _own_vram_bytes(device_index)
+    own = max(reserved, models) if count_own_vram else 0
+
+    if verbose:
+        print(f"[VWaitForVRAM] cuda:{device_index} driver_free={free_bytes / BYTES_PER_GB:.2f} GB, "
+              f"torch_pool={reserved / BYTES_PER_GB:.2f} GB, comfy_models={models / BYTES_PER_GB:.2f} GB "
+              f"-> counted as free: {(free_bytes + own) / BYTES_PER_GB:.2f} GB")
+
+    return (free_bytes + own) / BYTES_PER_GB
 
 
 class VWaitForVRAM:
@@ -102,7 +136,7 @@ device the node passes through immediately.
 
     def main(self, min_free_gb, device_index, poll_seconds, timeout_seconds, on_timeout, count_own_vram=True, any_in=None, unique_id=None):
         device_index = int(device_index)
-        free_gb = _free_vram_gb(device_index, count_own_vram)
+        free_gb = _free_vram_gb(device_index, count_own_vram, verbose=True)
 
         if free_gb is None:
             print("[VWaitForVRAM] No CUDA device - passing through.")
