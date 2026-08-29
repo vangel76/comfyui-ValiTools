@@ -74,14 +74,16 @@ Passes one of its connected inputs through at random. Accepts any input type —
 Holds execution until the GPU has a minimum amount of free VRAM.
 
 - Splice it into a wire ahead of the memory-hungry part of the graph (usually the sampler's `latent_image` or `model` input) - everything **downstream** of it waits, the value on `any_in` is passed through untouched
-- Free memory is read from the CUDA driver, so VRAM held by **other processes** counts as well
+- Free memory is read from the CUDA driver. VRAM held by **this** ComfyUI counts as available (`count_own_vram`, on by default) because ComfyUI frees its own models when it needs room - so what you actually wait for is **other processes** letting go. Switch it off for a strict driver-only reading (the node will then block once a model is resident)
 - It only waits: it never unloads or frees anything itself
-- `min_free_gb`, `device_index`, `poll_seconds`, `timeout_seconds` (0 = wait forever), `on_timeout` (`continue` / `error`)
+- `min_free_gb`, `device_index`, `poll_seconds`, `timeout_seconds` (0 = wait forever), `on_timeout` (`continue` / `error`), `count_own_vram`
 - Waiting is cancellable with ComfyUI's stop button; the node shows the live reading while it waits
 - Without a CUDA device it passes through immediately
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.14.1
+  - VWaitForVRAM: fixed the node blocking forever from the second render on. The driver's free value collapses once ComfyUI has a model resident, so the node waited for memory it was holding itself. VRAM used by this process now counts as available (`count_own_vram`, on by default) - the wait is for other processes, which is the point of the node
 - v1.14.0
   - New node: VWaitForVRAM - holds execution until the GPU has a minimum amount of free VRAM (driver reading, so other processes count), with timeout policy, live status on the node and a cancellable wait
 - v1.13.0
