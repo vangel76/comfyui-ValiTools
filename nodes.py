@@ -84,12 +84,14 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 # Gate a combination or wildcard on a variable's value: glue '<name>==value::' DIRECTLY in front of it.
 # Value matches (case-insensitive) -> it resolves normally. No match -> the whole thing outputs nothing.
 # '<name>!=value::' is the NOT form: fires for every value EXCEPT the given one.
+# Several values act as OR - separate them with commas: '<surface>==counter,table,desk::{...}' fires for all three, '!=' then means none of them.
 # Assign the tag BEFORE the switch. Silent branch tags are perfect for this:
 
     she is {cutting the wedding cake cake==!<act>|holding a champagne glas glass==!<act>|dancing dance==!<act>}.
     <act>==cake::{she serves the cake|she cuts another slice}
     <act>!=cake::{she is not near the cake}      # fires for glass AND dance
     <act>==cake::__cake_actions__               # wildcards can be gated too
+    <act>==cake,cupcake,pie::{she picks up a fork}   # OR: fires for any of the listed values
 
 ## Word weightning
 # This is already natively supported by ComfyUI - in case you didn't know, it reinforces the importance of the encased words.
@@ -483,7 +485,13 @@ def dynamic_prompts(
         return slice_start + gm.start(), gm.group(1).lower(), gm.group(2), gm.group(3).strip().lower()
 
     def _guard_is_true(var_name: str, operator: str, wanted_value: str) -> bool:
-        equal = str(variables.get(var_name, "")).strip().lower() == wanted_value
+        # Comma separated values act as OR: '<surface>==counter,table::' fires for both.
+        # The unsplit string stays a candidate, so a value that itself contains a comma
+        # ('{crime scene, night}==<loc>') keeps matching as before.
+        current = str(variables.get(var_name, "")).strip().lower()
+        candidates = {wanted_value}
+        candidates.update(part.strip() for part in wanted_value.split(",") if part.strip())
+        equal = current in candidates
         return equal if operator == "==" else not equal
 
     def _substitute_variables(

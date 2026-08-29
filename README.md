@@ -16,7 +16,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Variable hand-over**: wire a node's `variables` output into the next node's `vars_in` input and every `<name>` it assigned works there too - references, switcher conditions and all. Inherited variables travel on down the chain; a local assignment to the same name wins
-- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
+- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Several values separated by commas act as OR: `<surface>==counter,table,desk::{...}`. Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
 - Outputs: `prompt` (resolved), `original_prompt`, `variables` (for `vars_in` of another VSmartPrompt)
 
 #### Example - every feature at a glance
@@ -70,6 +70,8 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
 # Changelog
+- v1.13.0
+  - VSmartPrompt: switcher conditions accept several values as OR - `<surface>==counter,table,desk::{...}` fires for any of them, `!=` then means none of them. Spacing around the commas is ignored; a value that itself contains a comma keeps matching as a whole, so existing prompts are unaffected
 - v1.12.2
   - VSmartPrompt: fixed switcher conditions reacting to a discarded branch. A `{...}==<name>` or `__file__==<name>` sitting INSIDE another block assigned its value as soon as it resolved - which happens innermost-first, before the outer block has even picked a branch. Guards further down then judged against a value from a branch that was never selected (`<shot>` read `upper chest` while `forehead` won). Such assignments are now parked and only applied once their branch has actually survived
 - v1.12.1

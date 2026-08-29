@@ -1,7 +1,7 @@
 [project]
 name = "valitools"
 description = "ValiTools node collection: VSmartPrompt (Dynamic Prompts with rich-text editor, reusable variables, switcher conditions, chaining inputs and post-run selection highlighting), VFileRandom (no-repeat random image loader) and VRandomSelector (lazy random passthrough of N same-type inputs)."
-version = "1.12.2"
+version = "1.13.0"
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
 classifiers = [
