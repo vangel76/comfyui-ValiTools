@@ -69,7 +69,21 @@ Passes one of its connected inputs through at random. Accepts any input type —
 - Keep `seed` on *randomize* — same seed + same connections = same pick
 - Outputs: `selected` (typed like the inputs), `selected_index` (1-based)
 
+### VWaitForVRAM
+
+Holds execution until the GPU has a minimum amount of free VRAM.
+
+- Splice it into a wire ahead of the memory-hungry part of the graph (usually the sampler's `latent_image` or `model` input) - everything **downstream** of it waits, the value on `any_in` is passed through untouched
+- Free memory is read from the CUDA driver, so VRAM held by **other processes** counts as well
+- It only waits: it never unloads or frees anything itself
+- `min_free_gb`, `device_index`, `poll_seconds`, `timeout_seconds` (0 = wait forever), `on_timeout` (`continue` / `error`)
+- Waiting is cancellable with ComfyUI's stop button; the node shows the live reading while it waits
+- Without a CUDA device it passes through immediately
+- Outputs: `any_out` (the passed-through value), `free_gb`
+
 # Changelog
+- v1.14.0
+  - New node: VWaitForVRAM - holds execution until the GPU has a minimum amount of free VRAM (driver reading, so other processes count), with timeout policy, live status on the node and a cancellable wait
 - v1.13.0
   - VSmartPrompt: switcher conditions accept several values as OR - `<surface>==counter,table,desk::{...}` fires for any of them, `!=` then means none of them. Spacing around the commas is ignored; a value that itself contains a comma keeps matching as a whole, so existing prompts are unaffected
 - v1.12.2
