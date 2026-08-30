@@ -6,3 +6,11 @@ node.zip
 .codex
 .tracking
 vfile_random_state.json
+
+# Personal wildcard content - kept local, never published with the package
+wildcards/bodytypes.txt
+wildcards/faces.txt
+wildcards/facescasual.txt
+wildcards/tits.txt
+wildcards/help.txt
+wildcards/help2.txt
