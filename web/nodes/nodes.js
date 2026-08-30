@@ -119,7 +119,7 @@ app.registerExtension({
 		const VARIABLE_REF_REGEX = /<([A-Za-z0-9_]+)>/g;
 		// Autocomplete: assignment with its source (for the dropdown preview), and the
 		// partial reference being typed directly before the cursor ('<', '<ha', ...).
-		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{[^{}]*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
+		const VARIABLE_ASSIGN_PREVIEW_REGEX = /(\{(?:[^{}]|\{[^{}]*\})*\}|__.+?__|[^\s{}|<>=]+)\s*==\s*!?<([A-Za-z0-9_]+)>/g;
 		const VARIABLE_PARTIAL_REGEX = /<([A-Za-z0-9_]*)$/;
 		// Characters a wildcard name being typed may contain. The opening '__' itself
 		// is located with lastIndexOf - a regex would match the leftmost '__' on the
@@ -1242,6 +1242,16 @@ app.registerExtension({
 					const preview = String(value).length > 32 ? `${String(value).substring(0, 31)}…` : String(value);
 					vars.set(name, { name, preview });
 				}
+				// Names come from the SAME scan the highlighting uses, so the dropdown can
+				// never disagree with it (the preview regex below cannot see an assignment
+				// on a nested block like '{a {x|y} b}==<v>' and used to drop those).
+				VARIABLE_ASSIGN_SCAN_REGEX.lastIndex = 0;
+				let scanMatch;
+				while ((scanMatch = VARIABLE_ASSIGN_SCAN_REGEX.exec(plainText)) !== null) {
+					const name = scanMatch[1];
+					if (!vars.has(name.toLowerCase())) vars.set(name.toLowerCase(), { name, preview: "assigned" });
+				}
+				// ...then enrich with the assigned source text wherever it can be extracted
 				VARIABLE_ASSIGN_PREVIEW_REGEX.lastIndex = 0;
 				let m;
 				while ((m = VARIABLE_ASSIGN_PREVIEW_REGEX.exec(plainText)) !== null) {

@@ -82,6 +82,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.14.3
+  - VSmartPrompt: the `<` dropdown missed variables assigned to a NESTED block (`{large {left|right} chest}==<part>`) - the editor coloured them as defined while the dropdown claimed there was nothing to complete. Both now read the same scan, so they can no longer disagree; nested assignments also get a proper preview
 - v1.14.2
   - VWaitForVRAM: the node now also reads ComfyUI's own model bookkeeping (`current_loaded_models`), not just the torch allocator pool, when deciding how much of the occupied VRAM is its own - the pool alone can report far less than is actually held. Each run logs the breakdown (driver free / torch pool / ComfyUI models) to the console
 - v1.14.1
