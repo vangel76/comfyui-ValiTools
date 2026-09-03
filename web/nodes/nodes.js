@@ -207,7 +207,10 @@ app.registerExtension({
 
 					const previousIsHash = i > 0 && line[i - 1] === "#";
 					const nextIsHash = i + 1 < line.length && line[i + 1] === "#";
-					if (!previousIsHash && !nextIsHash) {
+					// A '#' that belongs to a '/#' or '#/' block marker must not close an
+					// inline comment - both comment styles stay independent (mirrors nodes.py).
+					const isBlockMarker = (i > 0 && line[i - 1] === "/") || (i + 1 < line.length && line[i + 1] === "/");
+					if (!previousIsHash && !nextIsHash && !isBlockMarker) {
 						return i;
 					}
 				}
@@ -216,49 +219,42 @@ app.registerExtension({
 			};
 
 			const highlightComments = (text) => {
-				return text.split("\n").map((line) => {
-					let result = "";
-					let cursor = 0;
+				let result = "";
+				let cursor = 0;
 
-					while (cursor < line.length) {
-						const hashIndex = line.indexOf("#", cursor);
-						if (hashIndex === -1) {
-							result += line.slice(cursor);
-							break;
-						}
+				while (cursor < text.length) {
+					const blockIndex = text.indexOf("/#", cursor);
+					const hashIndex = text.indexOf("#", cursor);
+					const nextIndex = blockIndex === -1 ? hashIndex : hashIndex === -1 ? blockIndex : Math.min(blockIndex, hashIndex);
+					if (nextIndex === -1) return result + text.slice(cursor);
 
-						result += line.slice(cursor, hashIndex);
-
-						let markerEnd = hashIndex + 1;
-						while (markerEnd < line.length && line[markerEnd] === "#") {
-							markerEnd++;
-						}
-
-						const markerLength = markerEnd - hashIndex;
-						const style = getCommentStyle(markerLength);
-
-						if (markerLength > 1) {
-							const commentText = line.slice(hashIndex);
-							result += protect(`<span style="${style}">${escapeHTML(commentText)}</span>`);
-							cursor = line.length;
-							break;
-						}
-
-						const closingIndex = findClosingSingleHash(line, markerEnd);
-						if (closingIndex === -1) {
-							const commentText = line.slice(hashIndex);
-							result += protect(`<span style="${style}">${escapeHTML(commentText)}</span>`);
-							cursor = line.length;
-							break;
-						}
-
-						const commentText = line.slice(hashIndex, closingIndex + 1);
-						result += protect(`<span style="${style}">${escapeHTML(commentText)}</span>`);
-						cursor = closingIndex + 1;
+					result += text.slice(cursor, nextIndex);
+					if (nextIndex === blockIndex) {
+						const closingIndex = text.indexOf("#/", blockIndex + 2);
+						const endIndex = closingIndex === -1 ? text.length : closingIndex + 2;
+						result += protect(`<span style="${getCommentStyle(1)}">${escapeHTML(text.slice(blockIndex, endIndex))}</span>`);
+						cursor = endIndex;
+						continue;
 					}
 
-					return result;
-				}).join("\n");
+					const remainingLine = text.slice(hashIndex).split(/\r?\n/, 1)[0];
+					let markerEnd = 1;
+					while (markerEnd < remainingLine.length && remainingLine[markerEnd] === "#") markerEnd++;
+					const markerLength = markerEnd;
+					const style = getCommentStyle(markerLength);
+					if (markerLength > 1) {
+						result += protect(`<span style="${style}">${escapeHTML(remainingLine)}</span>`);
+						cursor = hashIndex + remainingLine.length;
+						continue;
+					}
+
+					const closingIndex = findClosingSingleHash(remainingLine, markerEnd);
+					const commentText = closingIndex === -1 ? remainingLine : remainingLine.slice(0, closingIndex + 1);
+					result += protect(`<span style="${style}">${escapeHTML(commentText)}</span>`);
+					cursor = hashIndex + commentText.length;
+				}
+
+				return result;
 			};
 		
 			// ------------------------

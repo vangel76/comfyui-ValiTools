@@ -47,7 +47,9 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 
 # These pull a random non-empty line from a TXT file directly stored in 'wildcard_directory'.
 # They use double underscore delimiters and its content should be the filename without extension.
-# Single '#' comments still go until the end of the line, but '#comment#' can now be used inline too.
+# Single '#' comments still go until the end of the line, '#comment#' works inline, and '/# ... #/' comments can span several lines.
+/# This is a multi-line comment.
+   Everything here is ignored by VSmartPrompt. #/
 # When 'wildcard_directory\filename.txt' does not exist -> the __filename__ string will remain in the prompt.
 # Wildcards are highlighted as YELLOW when they point to a .txt file that exists - otherwise, RED. 
 # This highlight feature only supports up to 4 nested subfolders - wildcards pointing to deeper files will still work but show up as red.
@@ -298,29 +300,39 @@ def dynamic_prompts(
         return text[start:end], stripped_map
 
     def _find_comment_end(text: str, start_index: int) -> int:
+        # '#' comments never cross a line break. This is called on the WHOLE prompt
+        # (block comments may span lines), so the line end has to be found explicitly
+        # instead of relying on len(text).
+        newline_index = text.find("\n", start_index)
+        line_end = len(text) if newline_index == -1 else newline_index
+
         marker_end = start_index + 1
-        while marker_end < len(text) and text[marker_end] == "#":
+        while marker_end < line_end and text[marker_end] == "#":
             marker_end += 1
 
         # Keep the existing behavior for ##... and ###... comments:
         # they still run until the end of the line.
         if marker_end - start_index > 1:
-            return len(text)
+            return line_end
 
         search_index = marker_end
-        while search_index < len(text):
+        while search_index < line_end:
             if text[search_index] != "#":
                 search_index += 1
                 continue
 
             previous_is_hash = search_index > 0 and text[search_index - 1] == "#"
-            next_is_hash = search_index + 1 < len(text) and text[search_index + 1] == "#"
-            if not previous_is_hash and not next_is_hash:
+            next_is_hash = search_index + 1 < line_end and text[search_index + 1] == "#"
+            # A '#' belonging to a '/#' or '#/' block marker must not close an inline
+            # comment - the two comment styles have to stay independent of each other.
+            is_block_marker = (search_index > 0 and text[search_index - 1] == "/") or \
+                              (search_index + 1 < len(text) and text[search_index + 1] == "/")
+            if not previous_is_hash and not next_is_hash and not is_block_marker:
                 return search_index + 1
 
             search_index += 1
 
-        return len(text)
+        return line_end
 
     def _remove_comments_and_map(
         text: str,
@@ -334,6 +346,14 @@ def dynamic_prompts(
         index = 0
 
         while index < len(text):
+            # Block comments may cross lines. Strip them before resolution so their
+            # contents cannot trigger combinations, wildcards, variables, or guards.
+            # Checked at the '/' so the '#' of '/#' is never read as a line comment.
+            if text.startswith("/#", index):
+                closing_index = text.find("#/", index + 2)
+                index = len(text) if closing_index == -1 else closing_index + 2
+                continue
+
             if text[index] != "#":
                 visible_chars.append(text[index])
                 if visible_map is not None:
@@ -1264,20 +1284,9 @@ def dynamic_prompts(
         text_source_map: list[int | None] | None,
         text_wildcard_map: list[int | None] | None,
     ) -> tuple[str, list[int | None] | None, list[int | None] | None]:
-        lines, line_maps = _split_lines_with_map(text, text_source_map)
-        _, line_wildcard_maps = _split_lines_with_map(text, text_wildcard_map)
-        cleaned_lines: list[str] = []
-        cleaned_maps: list[list[int | None] | None] = []
-        cleaned_wildcard_maps: list[list[int | None] | None] = []
-        for line, line_map, line_wmap in zip(lines, line_maps, line_wildcard_maps):
-            cleaned, cleaned_map = _remove_comments_and_map(line, line_map)
-            _, cleaned_wmap = _remove_comments_and_map(line, line_wmap)
-            cleaned_lines.append(cleaned)
-            cleaned_maps.append(cleaned_map)
-            cleaned_wildcard_maps.append(cleaned_wmap)
-        joined, joined_map = _join_text_segments(cleaned_lines, cleaned_maps, "\n")
-        _, joined_wmap = _join_text_segments(cleaned_lines, cleaned_wildcard_maps, "\n")
-        return joined, joined_map, joined_wmap
+        cleaned, cleaned_map = _remove_comments_and_map(text, text_source_map)
+        _, cleaned_wildcard_map = _remove_comments_and_map(text, text_wildcard_map)
+        return cleaned, cleaned_map, cleaned_wildcard_map
 
     if "#" in prompt:
         prompt, source_map, wildcard_origin_map = _strip_all_comments(prompt, source_map, wildcard_origin_map)
@@ -1705,4 +1714,3 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VSmartPrompt": "VSmartPrompt",
 }
-

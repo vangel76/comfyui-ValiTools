@@ -14,3 +14,8 @@ wildcards/facescasual.txt
 wildcards/tits.txt
 wildcards/help.txt
 wildcards/help2.txt
+wildcards/celeb.txt
+wildcards/haircolor2.txt
+.gitignore
+wildcards/haircolor3.txt
+deploy.sh

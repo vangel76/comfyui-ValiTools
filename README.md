@@ -11,7 +11,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Combinations**: `{a|b}` with optional `N::` weights, nested at will, per-level coloring
 - **Wildcards**: `__file__` pulls a random line from a `.txt` in `wildcard_directory` (subfolders supported); typing `__` opens an autocomplete dropdown of the existing wildcard files; CTRL+Click opens or creates the file in a built-in editor (works on remote installs too)
 - **Variables**: `{a|b}==<name>`, `__file__==<name>` or `word==<name>` store the resolved value - rolled ONCE, constant everywhere you reuse `<name>`; assignments inside combination branches only fire for the selected branch; typing `<` opens an autocomplete dropdown of all assigned variables. Silent variant `==!<name>` stores the value but outputs nothing at the definition site - only the `<name>` references emit it (references work even before the assignment)
-- **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles
+- **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles, or multi-line `/# comment #/` blocks
 - **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. The `⎘` button copies the whole prompt as plain text. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
@@ -29,6 +29,9 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 a {photo|{oil|water} painting} of a {0.7::cute|scary} __animal__==<pet>
 # {a|b} picks one option (nesting ok), '0.7::' sets its chance to 70%
 # __animal__ pulls a random line from animal.txt, '==<pet>' remembers the result
+
+/# This can span several lines.
+   Its syntax is ignored completely. #/
 
 the <pet> naps in a (cozy:1.2) {garden|kitchen}. {day|night}==!<time> #the same <pet> again!#
 # '<pet>' outputs the SAME value everywhere. '==!<time>' remembers silently (outputs nothing)
@@ -82,6 +85,10 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.14.4
+  - VSmartPrompt: added `/# multi-line comments #/`; block contents are stripped before resolution and cannot trigger rolls, wildcards, variables, or switchers
+  - VSmartPrompt: a `#` belonging to a `/#` or `#/` marker no longer closes an inline `#comment#`, so both comment styles stay independent
+  - VSmartPrompt: `#` comments are line-bound again - after the switch to whole-text comment stripping they ran to the end of the whole prompt, swallowing every line below them
 - v1.14.3
   - VSmartPrompt: the `<` dropdown missed variables assigned to a NESTED block (`{large {left|right} chest}==<part>`) - the editor coloured them as defined while the dropdown claimed there was nothing to complete. Both now read the same scan, so they can no longer disagree; nested assignments also get a proper preview
 - v1.14.2
