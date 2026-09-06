@@ -14,9 +14,9 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles, or multi-line `/# comment #/` blocks
 - **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. The `⎘` button copies the whole prompt as plain text. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
-- **String inputs**: four optional input sockets `in1`-`in4`; connected text is available in the prompt as `<in1>`-`<in4>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
+- **String inputs**: six optional input sockets `in1`-`in6`; connected text is available in the prompt as `<in1>`-`<in6>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Variable hand-over**: wire a node's `variables` output into the next node's `vars_in` input and every `<name>` it assigned works there too - references, switcher conditions and all. Inherited variables travel on down the chain; a local assignment to the same name wins
-- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Several values separated by commas act as OR: `<surface>==counter,table,desk::{...}`. Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in4` too; assign the tag before the switch
+- **Switcher**: glue `<name>==value::` directly in front of a `{...}` block or `__wildcard__` to gate it on a variable's value (case-insensitive) - match resolves normally, mismatch outputs nothing. `<name>!=value::` is the NOT form (fires for every other value). Several values separated by commas act as OR: `<surface>==counter,table,desk::{...}`. Tag the state with silent branch assignments (`{... cake==!<act>|... glass==!<act>}`), then later `<act>==cake::{...}` / `<act>!=cake::{...}`. Works with `in1`-`in6` too; assign the tag before the switch
 - Outputs: `prompt` (resolved), `original_prompt`, `variables` (for `vars_in` of another VSmartPrompt)
 
 #### Example - every feature at a glance
@@ -85,6 +85,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.15.0
+  - VSmartPrompt: six string input sockets instead of four (`in1`-`in6`), usable as `<in5>` / `<in6>` in references and switcher conditions; the socket list is now a single constant, so the count is a one-line change
 - v1.14.4
   - VSmartPrompt: added `/# multi-line comments #/`; block contents are stripped before resolution and cannot trigger rolls, wildcards, variables, or switchers
   - VSmartPrompt: a `#` belonging to a `/#` or `#/` marker no longer closes an inline `#comment#`, so both comment styles stay independent
@@ -106,7 +108,7 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - v1.12.0
   - VSmartPrompt: typing `__` opens a dropdown of the existing wildcard files, just like `<` does for variables - filters as you type (substring match, prefix matches first), UP/DOWN + ENTER/TAB or click inserts `__name__`. Only offered while a `__` is actually open, so a finished `__wildcard__` no longer triggers it
 - v1.11.0
-  - VSmartPrompt: variables can be handed from node to node - new `variables` output and `vars_in` input. Everything a prompt assigned (including what it inherited itself) is available in the next node as a normal `<name>`, works with switcher conditions, and a local assignment to the same name still wins. The `in1`-`in4` socket names are deliberately not passed on. Changed inherited values re-roll the downstream picks even with a fixed seed
+  - VSmartPrompt: variables can be handed from node to node - new `variables` output and `vars_in` input. Everything a prompt assigned (including what it inherited itself) is available in the next node as a normal `<name>`, works with switcher conditions, and a local assignment to the same name still wins. The `in1`-`in6` socket names are deliberately not passed on. Changed inherited values re-roll the downstream picks even with a fixed seed
 - v1.10.0
   - VSmartPrompt: CTRL+Click on a wildcard now opens its `.txt` in a built-in editor overlay (load, edit, save) instead of handing the path to the operating system's file handler. This removes the last system call from the package - the old behaviour never worked on remote ComfyUI installs and got the package flagged by the registry's security scan
   - Packaging: registry metadata completed (`[project.urls]` table, `requires-python`, classifiers, empty `Icon` removed), `.comfyignore` added, build artifacts (`node.zip`, `.codex`, `.tracking`) removed from git, and a GitHub Action publishes automatically when `pyproject.toml` changes

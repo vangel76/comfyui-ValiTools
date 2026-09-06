@@ -71,7 +71,7 @@ DEFAULT_PROMPT = r"""### Instructions and Tips
 # That also works inside combination branches - only the SELECTED branch's assignment happens: her {face==<part>|fore-head==<part>|head==<part>}
 # For a fixed MULTI-WORD text use a single-choice combination: {crime scene}==<loc>
 # SILENT assignment: '==!<name>' stores the value but outputs NOTHING where it stands - only the <name> references output it.
-# NODE INPUTS: text connected to the in1..in4 input sockets is available here as <in1>..<in4> - chain VSmartPrompt nodes by wiring one's output into another's socket.
+# NODE INPUTS: text connected to the in1..in6 input sockets is available here as <in1>..<in6> - chain VSmartPrompt nodes by wiring one's output into another's socket.
 # VARIABLE HAND-OVER: wire a node's 'variables' output into the next node's 'vars_in' input and every <name> it assigned works there too (and travels on down the chain).
 # TIP: typing '<' opens a dropdown with all assigned variables - type to filter, UP/DOWN + ENTER/TAB or click to insert, ESC to close.
 
@@ -474,7 +474,7 @@ def dynamic_prompts(
         return wildcard_resolutions
 
     # --- VARIABLES ({a|b}==<name> / __file__==<name> assigns, <name> references) ---
-    # Pre-seeded with the node's string input sockets (in1..in4) so upstream node
+    # Pre-seeded with the node's string input sockets (in1..in6) so upstream node
     # outputs can be referenced in the text; inserted as-is, never re-resolved.
     # A prompt-internal assignment to the same name overwrites (last assignment wins).
     variables: dict[str, str] = {}
@@ -1427,14 +1427,17 @@ def dynamic_prompts(
     return prompt
 
 
-class VSmartPrompt:    
+class VSmartPrompt:
+    # Adding another socket is a one-line change: extend this tuple.
+    INPUT_SOCKET_NAMES = ("in1", "in2", "in3", "in4", "in5", "in6")
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 # Kept to preserve the widget order expected by older saved workflows.
                 "available_loras_stem": ("STRING", {"default": "", "dynamicPrompts": False, "tooltip": "Compatibility placeholder for older workflows. This field is kept only to preserve widget ordering."}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Same seed + same prompt + same connected in1-in4 texts always returns the same output prompt. Changed input text re-rolls the picks even with a fixed seed."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Same seed + same prompt + same connected in1-in6 texts always returns the same output prompt. Changed input text re-rolls the picks even with a fixed seed."}),
                 "line_suffix": ("STRING", {"multiline": False, "default": "", "dynamicPrompts": False, "tooltip": "Appends this string to the end of every line. Useful to automate suffixing of tags and descriptive text with either commas or single dots."}),
                 "single_line_output": ("BOOLEAN", {"default": True, "tooltip": "This must be True for multi-line combinations to work."}),
                 "remove_whitespaces": ("BOOLEAN", {"default": True, "tooltip": "Trims every line and converts multiple spaces to single space, ex: '   ' -> ' '. Also removes empty lines."}),
@@ -1445,10 +1448,10 @@ class VSmartPrompt:
             },
             "optional": {
                 "prompt": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "dynamicPrompts": False}),
-                "in1": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in1>. Inserted as-is (not re-resolved). The upstream branch only executes if <in1> appears in the prompt."}),
-                "in2": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in2>. Inserted as-is (not re-resolved). The upstream branch only executes if <in2> appears in the prompt."}),
-                "in3": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in3>. Inserted as-is (not re-resolved). The upstream branch only executes if <in3> appears in the prompt."}),
-                "in4": ("STRING", {"forceInput": True, "lazy": True, "tooltip": "External text, reference it in the prompt as <in4>. Inserted as-is (not re-resolved). The upstream branch only executes if <in4> appears in the prompt."}),
+                **{
+                    name: ("STRING", {"forceInput": True, "lazy": True, "tooltip": f"External text, reference it in the prompt as <{name}>. Inserted as-is (not re-resolved). The upstream branch only executes if <{name}> appears in the prompt."})
+                    for name in cls.INPUT_SOCKET_NAMES
+                },
                 "vars_in": ("VS_VARS", {"tooltip": "Variables from another VSmartPrompt: wire its 'variables' output here and every <name> it assigned is available in this prompt (and is passed on again)."}),
             },
         }
@@ -1480,8 +1483,6 @@ remove_loras_pattern: Legacy compatibility toggle that strips LoRA tags from the
 wildcard_directory: The directory where TXT wildcard files are stored.
 """
 
-    INPUT_SOCKET_NAMES = ("in1", "in2", "in3", "in4")
-
     def check_lazy_status(self, prompt=DEFAULT_PROMPT, **kwargs):
         # Request a connected input only when '<inN>' actually appears in the prompt
         # text - otherwise the whole upstream branch is never executed.
@@ -1494,7 +1495,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
     def main(self, available_loras_stem, seed, line_suffix, single_line_output, remove_whitespaces, remove_empty_tags, load_loras_from_prompt, remove_loras_pattern, wildcard_directory, prompt=DEFAULT_PROMPT, **kwargs):
         _ = available_loras_stem, load_loras_from_prompt
         # Skipped (unused) lazy inputs arrive as None - treated like unconnected ones.
-        in1, in2, in3, in4 = (kwargs.get(name) for name in self.INPUT_SOCKET_NAMES)
+        socket_values = {name: kwargs.get(name) for name in self.INPUT_SOCKET_NAMES}
         single_line_output = True
         remove_whitespaces = True
         remove_empty_tags = True
@@ -1507,7 +1508,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
         preset_variables = {}
         if isinstance(inherited_variables, dict):
             preset_variables.update({str(k).lower(): str(v) for k, v in inherited_variables.items() if v is not None})
-        preset_variables.update({"in1": in1, "in2": in2, "in3": in3, "in4": in4})
+        preset_variables.update(socket_values)
 
         # Mix connected inputs into the effective seed: when an upstream node's output
         # changes, this node's combination/wildcard picks re-roll too - even with a
@@ -1539,7 +1540,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
                 dp = dynamic_prompts(prompt=dp, seed=seed, line_suffix=line_suffix, single_line_output=single_line_output, remove_whitespaces=remove_whitespaces, remove_empty_tags=remove_empty_tags, wildcard_dir=wildcard_directory)
         
         # Everything this prompt knows travels on: inherited variables plus the ones
-        # assigned here. The in1..in4 socket names are dropped - the next node has its
+        # assigned here. The in1..in6 socket names are dropped - the next node has its
         # own sockets and '<in1>' there must mean ITS input, not this node's.
         outgoing_variables = {
             name: value for name, value in variable_values.items()

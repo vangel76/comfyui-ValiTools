@@ -130,7 +130,7 @@ app.registerExtension({
 		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*(?:==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
 		const variableStyle = "color:#DA70D6; font-weight:bold;";
 		// String input sockets usable as variables in the text (<in1>..<in4>)
-		const INPUT_VAR_NAMES = ["in1", "in2", "in3", "in4"];
+		const INPUT_VAR_NAMES = ["in1", "in2", "in3", "in4", "in5", "in6"];
 		const getConnectedInputVars = (node) =>
 			INPUT_VAR_NAMES.filter((name) => node?.inputs?.some((i) => i.name === name && i.link != null));
 
