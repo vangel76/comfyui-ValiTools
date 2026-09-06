@@ -85,6 +85,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.15.1
+  - VSmartPrompt: a variable assigned from another variable inside a nested block stored the literal reference instead of its value (`{<stab>}==!<grip>` gave `grip = "<stab>"`). Parked assignments are now substituted again when they are committed, are held back while a referenced variable is still unknown, and word assignments are collected before parked ones are written
 - v1.15.0
   - VSmartPrompt: six string input sockets instead of four (`in1`-`in6`), usable as `<in5>` / `<in6>` in references and switcher conditions; the socket list is now a single constant, so the count is a one-line change
 - v1.14.4

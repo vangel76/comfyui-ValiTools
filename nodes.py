@@ -586,6 +586,16 @@ def dynamic_prompts(
                 continue  # still inside a branch that may yet be discarded
 
             name, silent, value = pending_assignments[int(match.group(1))]
+
+            # The value was frozen when its branch was picked, but variables it
+            # references may only have been assigned afterwards - substitute again now.
+            value = _substitute_variables(value)
+            if only_unbraced and any(
+                ref.lower() not in variables for ref in VARIABLE_REF_PATTERN.findall(value)
+            ):
+                continue  # a referenced variable is still unknown - retry next pass
+
+            pending_assignments[int(match.group(1))] = (name, silent, value)
             variables[name] = value
             emitted = "" if silent else value
 
@@ -1335,11 +1345,11 @@ def dynamic_prompts(
         # 'word==<name>' assignments (outside any braces), so switcher guards see the
         # tags of the SELECTED branch on the next pass - and only those.
         if source_map is None:
-            prompt = _commit_pending_assignments(prompt)
             prompt = _capture_literal_assignments(prompt, only_unbraced=True)
+            prompt = _commit_pending_assignments(prompt)
         else:
-            prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map)
             prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=True)
+            prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map)
 
         if (prompt, len(variables)) == iteration_snapshot:
             break  # only deferred guards (unassigned tags) remain - the sweep handles them
@@ -1396,13 +1406,13 @@ def dynamic_prompts(
     # final substitution pass for all references (including ones that appeared before
     # their assignment).
     if source_map is None:
-        prompt = _commit_pending_assignments(prompt, only_unbraced=False)
         prompt = _capture_literal_assignments(prompt)
+        prompt = _commit_pending_assignments(prompt, only_unbraced=False)
         prompt = _sweep_guards(prompt)
         prompt = _substitute_variables(prompt)
     else:
-        prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=False)
         prompt, source_map, wildcard_origin_map = _capture_literal_assignments(prompt, source_map, wildcard_origin_map)
+        prompt, source_map, wildcard_origin_map = _commit_pending_assignments(prompt, source_map, wildcard_origin_map, only_unbraced=False)
         prompt, source_map, wildcard_origin_map = _sweep_guards(prompt, source_map, wildcard_origin_map)
         prompt, source_map, wildcard_origin_map = _substitute_variables(prompt, source_map, wildcard_origin_map)
 
