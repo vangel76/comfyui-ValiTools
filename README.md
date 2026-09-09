@@ -86,6 +86,7 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 
 # Changelog
 - v1.15.2
+  - VSmartPrompt: the syntax reference is a compact one-screen sheet (60 lines instead of 160) - same rules, no prose
   - VSmartPrompt: the syntax reference now spells out that braces belong on the assignment side but never in a switcher condition - a condition value is plain text and may contain spaces, while braces there are a real combination block and make the condition random. This is the asymmetry LLMs kept getting wrong
   - VSmartPrompt: the default prompt was rewritten as a precise syntax reference an LLM can follow - every construct spelled out, plus a section of the rules that are easy to get wrong (`==<name>` binds only to the construct in front of it, `word==<name>` takes a single word, wildcard files are read line by line, a switcher must touch its block and needs its tag assigned earlier). Also corrects the CTRL+Click description, which still promised an external text editor
 - v1.15.1

@@ -28,170 +28,66 @@ LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)
 GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
 GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
 
-DEFAULT_PROMPT = r"""### VSmartPrompt - syntax reference
-### Lines starting with '#' are comments. They are removed before anything is
-### resolved and never reach the output, so this whole text is safe to keep.
-###
-### IF YOU ARE AN AI WRITING A PROMPT FOR THIS NODE:
-### read sections 1-5 for the syntax and section 6 for the rules that are easy
-### to get wrong. Follow them literally. Delete this reference text and output
-### only the prompt itself.
+DEFAULT_PROMPT = r"""### VSmartPrompt syntax. '#' lines are comments and never reach the output.
+### AI: follow these rules literally, then output only the prompt itself.
 
-## 1. COMBINATIONS - pick one option
+## COMBINATION - one option is picked
+#   {a|b}              equal chance         {a|}  empty option = output nothing
+#   {0.7::a|b}         weight 0..1, unweighted options share what is left
+#   nesting allowed everywhere
 
-# Write options between '{' and '}', separated by '|'. One is picked at random.
-# All options are equally likely unless you give weights.
-# 'N::' in front of an option sets its probability, N between 0 and 1.
-# Options without a weight share whatever probability is left over.
-# An empty option means "output nothing".
-# Combinations may be nested to any depth.
+## WILDCARD - one random LINE from a .txt in the wildcard directory
+#   __name__           reads 'name.txt', no extension   __folder\name__ subfolder
+#   a missing file stays in the text (shown RED in the editor)
+#   FILE FORMAT: one option per line. Never wrap the file in braces, never start
+#   lines with '|' - the line is picked before anything is resolved. A block is
+#   only allowed inside a file if it sits on ONE line: a {red|blue} dress
 
-    A {red|blue} car.
-    A {green|} bird.
-    {0.1::green|0.2::yellow|{pink|red}} background.
-    {a child|{jumping|running} {cat|{large|small} dog}|a bored human}.
+## VARIABLE - rolled once, same value everywhere
+#   {a|b}==<v>         store the picked option and output it here
+#   __file__==<v>      store the pulled line
+#   word==<v>          store the ONE word before '==' (no spaces)
+#   {two words}==<v>   store several words
+#   {a|b}==!<v>        store WITHOUT outputting anything here
+#   <v>                output it, anywhere, even above its assignment
+#   never assigned -> stays as text (RED).  assigned twice -> last one wins.
 
-## 2. WILDCARDS - pick one line from a text file
+## SWITCHER - show a block only for certain values
+#   <v>==value::{...}  fires when <v> is that value; works on __wildcards__ too
+#   <v>!=value::{...}  fires for every other value
+#   <v>==a,b,c::{...}  OR list          <v>!=a,b,c::  none of them
+#   case-insensitive. must TOUCH the brace. assign <v> EARLIER in the text.
 
-# '__name__' pulls one random line from 'name.txt' in the wildcard directory.
-# Write the filename without the '.txt' extension, between double underscores.
-# Subfolders work: '__folder\subfolder\name__'.
-# A missing file is left in the prompt unchanged (and shows RED in the editor).
-# A pulled line may itself contain combinations, wildcards and variables.
+## COMMENT
+#   block comments run from /# to #/ and may span lines; the other forms are
+#   listed inside such a block so their hashes cannot pair up with each other:
 
-#     __animals__
-#     __clothing\dresses__
+/# # text           to the end of the line
+   a #note# b       inline, between two single hashes
+   ## text          headline style
+   ### text         bigger headline style  #/
 
-# FILE FORMAT - this is where most mistakes happen:
-# A wildcard file is read LINE BY LINE and exactly ONE line is picked.
-# Put ONE option per line. Do not wrap the file in '{' '}' and do not start
-# lines with '|' - a block spread over several lines cannot work, because the
-# line is picked before anything is resolved.
-#
-#   correct file:            wrong file:
-#     a red dress              {
-#     a blue dress             a red dress
-#     a long coat              |a blue dress
-#                              }
-#
-# A combination inside a wildcard file is fine as long as it sits on ONE line:
-#     a {red|blue} dress
+## TRAPS
+#   '==<v>' binds to the ONE construct in front of it:
+#       wrong  {a}, {b}==<v>            right  {a, b}==<v>
+#   a CONDITION value is plain text - no braces, they would be rolled:
+#       wrong  <v>=={upper body}::      right  <v>==upper body::
+#   an ASSIGNMENT of several words needs braces:
+#       wrong  upper body==<v>          right  {upper body}==<v>
+#   an assignment inside a branch only fires if that branch is picked
 
-## 3. VARIABLES - roll once, reuse everywhere
-
-# '==<name>' after a construct stores its resolved value under that name.
-# The value is rolled ONCE and stays the same at every '<name>' you write.
-# Names may contain letters, digits and underscores, and are case-insensitive.
-#
-# Three ways to assign:
-#     {a|b}==<name>        stores the picked option
-#     __file__==<name>     stores the pulled line
-#     word==<name>         stores the single word right before '=='
-#
-# '==<name>' outputs the value where it stands AND stores it.
-# '==!<name>' stores it but outputs NOTHING there - only '<name>' outputs it.
-# A '<name>' you never assigned stays in the text as-is (and shows RED).
-# Assigning the same name twice: the last assignment wins.
-
-    {blonde|ginger}==<haircolor> hair
-    her {light <haircolor>|dark <haircolor>} eyebrows match her <haircolor> hair
-#     __names__==<girlname> enters. Say hi to <girlname>!
-    {sunny|rainy|foggy}==!<weather>
-    the <weather> morning turns into a <weather> afternoon
-
-## 4. SWITCHER - show a block only for certain values
-
-# Glue '<name>==value::' DIRECTLY in front of a '{' or a '__wildcard__'.
-# Value matches -> the block resolves normally. No match -> nothing is output.
-#     '<name>!=value::'          fires for every value EXCEPT that one
-#     '<name>==a,b,c::'          fires for a OR b OR c
-#     '<name>!=a,b,c::'          fires for none of them
-# Values are compared case-insensitively and are plain text: they may contain
-# spaces and must NOT be wrapped in braces (see 6.3).
-# Assign the name BEFORE the switcher.
-
-    she is {cutting the cake cake==!<act>|holding a glass glass==!<act>|dancing dance==!<act>}.
-    <act>==cake::{she serves the cake|she cuts another slice}
-    <act>!=cake::{she is not near the cake}
-    <act>==cake,cupcake,pie::{she picks up a fork}
-    {upper body}==!<loc> <loc>==upper body::{the hit lands high}
-#     <act>==cake::__cake_actions__      (a wildcard can be gated the same way)
-
-## 5. COMMENTS
-
-# Block comments run from /# to #/ and may span as many lines as you like.
-# The remaining forms are listed inside such a block, so that the hashes in the
-# examples cannot pair up with each other:
-
-/# comment forms, shown literally:
-
-     # text            comments out the rest of the line
-     word #note# on    two single hashes comment out just the phrase between them
-     ## text           headline style, to the end of the line
-     ### text          bigger headline style
-
-   Everything inside this block is removed before anything is resolved. #/
-
-## 6. RULES THAT ARE EASY TO GET WRONG
-
-# 6.1  '==<name>' binds ONLY to the ONE construct directly in front of it.
-#      wrong:   {__names__}, {__bodytypes__}==!<woman>     stores only the second block
-#      right:   {__names__, __bodytypes__}==!<woman>       stores the whole block
-#
-# 6.2  'word==<name>' takes exactly ONE word, with no spaces.
-#      wrong:   crime scene==<loc>        stores only 'scene'
-#      right:   {crime scene}==<loc>      stores 'crime scene'
-#
-# 6.3  Braces belong on the ASSIGNMENT side, NEVER on the CONDITION side.
-#      A switcher value is plain text and may contain spaces, so write it bare.
-#      wrong:   <loc>=={upper body}::{X}
-#      right:   <loc>==upper body::{X}
-#      Braces in a condition are a real combination block and get ROLLED, which
-#      makes the condition random - '<loc>=={upper|lower} body::{X}' matched in
-#      10 of 30 runs. Compare with the assignment, where braces ARE required:
-#          upper body==!<loc>      stores only 'body'
-#          {upper body}==!<loc>    stores 'upper body'
-#
-# 6.4  A switcher must touch the '{' or '__' with no space in between.
-#      wrong:   <act>==cake:: she serves it      plain text is not gated
-#      right:   <act>==cake::{she serves it}
-#
-# 6.5  A switcher reads the value at its own position in the text, so the
-#      assignment must stand EARLIER in the prompt than the switcher.
-#
-# 6.6  A plain '<name>' reference works anywhere, even above its assignment -
-#      it always outputs the final value. Only switchers need the order.
-#
-# 6.7  An assignment inside a branch only happens if that branch is picked.
-#      In '{a==<v>|b==<v>}' exactly one of the two assignments fires.
-#
-# 6.8  Nesting is allowed everywhere: combinations in wildcards in
-#      combinations, switchers around nested blocks, and so on.
-
-## 7. WORKED EXAMPLE
-
-# Roll a person once, then describe her consistently and react to the setting.
+## EXAMPLE
 
     {__names__, __bodytypes__}==!<woman>
     {kitchen==!<room>|bedroom==!<room>|garden==!<room>}
     <woman> stands in the <room>.
     <room>==kitchen::{She is chopping vegetables|She is washing a plate}.
-    <room>==bedroom,garden::{She is looking out of the window}.
     <room>!=kitchen::{There is no knife in sight}.
 
 ## EDITOR
-
-#     CTRL + Click on a wildcard   opens its .txt in a built-in editor
-#                                  (creates the file if it does not exist yet;
-#                                   CTRL + ENTER saves, ESC closes)
-#     type '__'                    dropdown of the existing wildcard files
-#     type '<'                     dropdown of the assigned variables
-#     CTRL + F / CTRL + H          find and replace inside the prompt
-#     CTRL + Z / CTRL + SHIFT + Z  undo and redo
-#     CTRL + Mouse Wheel           font size
-#     CTRL + UP/DOWN on selection  ComfyUI text weighting, as in (word:1.2)
-#     after a run                  the picked options are marked white; hovering
-#                                  a wildcard or variable shows its rolled value
+#   CTRL+Click a wildcard edits its file. Type '__' or '<' for a dropdown.
+#   CTRL+F find, CTRL+Z undo, CTRL+UP/DOWN weighting, CTRL+Wheel font size.
+#   After a run the picked options are white; hover shows the rolled value.
 """
 
 
