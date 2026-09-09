@@ -106,12 +106,15 @@ DEFAULT_PROMPT = r"""### VSmartPrompt - syntax reference
 #     '<name>!=value::'          fires for every value EXCEPT that one
 #     '<name>==a,b,c::'          fires for a OR b OR c
 #     '<name>!=a,b,c::'          fires for none of them
-# Values are compared case-insensitively. Assign the name BEFORE the switcher.
+# Values are compared case-insensitively and are plain text: they may contain
+# spaces and must NOT be wrapped in braces (see 6.3).
+# Assign the name BEFORE the switcher.
 
     she is {cutting the cake cake==!<act>|holding a glass glass==!<act>|dancing dance==!<act>}.
     <act>==cake::{she serves the cake|she cuts another slice}
     <act>!=cake::{she is not near the cake}
     <act>==cake,cupcake,pie::{she picks up a fork}
+    {upper body}==!<loc> <loc>==upper body::{the hit lands high}
 #     <act>==cake::__cake_actions__      (a wildcard can be gated the same way)
 
 ## 5. COMMENTS
@@ -139,20 +142,30 @@ DEFAULT_PROMPT = r"""### VSmartPrompt - syntax reference
 #      wrong:   crime scene==<loc>        stores only 'scene'
 #      right:   {crime scene}==<loc>      stores 'crime scene'
 #
-# 6.3  A switcher must touch the '{' or '__' with no space in between.
+# 6.3  Braces belong on the ASSIGNMENT side, NEVER on the CONDITION side.
+#      A switcher value is plain text and may contain spaces, so write it bare.
+#      wrong:   <loc>=={upper body}::{X}
+#      right:   <loc>==upper body::{X}
+#      Braces in a condition are a real combination block and get ROLLED, which
+#      makes the condition random - '<loc>=={upper|lower} body::{X}' matched in
+#      10 of 30 runs. Compare with the assignment, where braces ARE required:
+#          upper body==!<loc>      stores only 'body'
+#          {upper body}==!<loc>    stores 'upper body'
+#
+# 6.4  A switcher must touch the '{' or '__' with no space in between.
 #      wrong:   <act>==cake:: she serves it      plain text is not gated
 #      right:   <act>==cake::{she serves it}
 #
-# 6.4  A switcher reads the value at its own position in the text, so the
+# 6.5  A switcher reads the value at its own position in the text, so the
 #      assignment must stand EARLIER in the prompt than the switcher.
 #
-# 6.5  A plain '<name>' reference works anywhere, even above its assignment -
+# 6.6  A plain '<name>' reference works anywhere, even above its assignment -
 #      it always outputs the final value. Only switchers need the order.
 #
-# 6.6  An assignment inside a branch only happens if that branch is picked.
+# 6.7  An assignment inside a branch only happens if that branch is picked.
 #      In '{a==<v>|b==<v>}' exactly one of the two assignments fires.
 #
-# 6.7  Nesting is allowed everywhere: combinations in wildcards in
+# 6.8  Nesting is allowed everywhere: combinations in wildcards in
 #      combinations, switchers around nested blocks, and so on.
 
 ## 7. WORKED EXAMPLE
