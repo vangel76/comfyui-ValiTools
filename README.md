@@ -85,6 +85,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.15.2
+  - VSmartPrompt: the default prompt was rewritten as a precise syntax reference an LLM can follow - every construct spelled out, plus a section of the rules that are easy to get wrong (`==<name>` binds only to the construct in front of it, `word==<name>` takes a single word, wildcard files are read line by line, a switcher must touch its block and needs its tag assigned earlier). Also corrects the CTRL+Click description, which still promised an external text editor
 - v1.15.1
   - VSmartPrompt: a variable assigned from another variable inside a nested block stored the literal reference instead of its value (`{<stab>}==!<grip>` gave `grip = "<stab>"`). Parked assignments are now substituted again when they are committed, are held back while a referenced variable is still unknown, and word assignments are collected before parked ones are written
 - v1.15.0

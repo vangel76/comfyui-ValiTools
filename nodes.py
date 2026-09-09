@@ -28,88 +28,157 @@ LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)
 GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
 GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
 
-DEFAULT_PROMPT = r"""### Instructions and Tips
+DEFAULT_PROMPT = r"""### VSmartPrompt - syntax reference
+### Lines starting with '#' are comments. They are removed before anything is
+### resolved and never reach the output, so this whole text is safe to keep.
+###
+### IF YOU ARE AN AI WRITING A PROMPT FOR THIS NODE:
+### read sections 1-5 for the syntax and section 6 for the rules that are easy
+### to get wrong. Follow them literally. Delete this reference text and output
+### only the prompt itself.
 
-## SYNTAX:
+## 1. COMBINATIONS - pick one option
 
-## COMBINATIONS
+# Write options between '{' and '}', separated by '|'. One is picked at random.
+# All options are equally likely unless you give weights.
+# 'N::' in front of an option sets its probability, N between 0 and 1.
+# Options without a weight share whatever probability is left over.
+# An empty option means "output nothing".
+# Combinations may be nested to any depth.
 
-# They use '{' and '}' delimiters with '|' as separator.
-# Distribution is even by default but you can specify custom choice distribution using 'N::' prefix where N is a number from 0 to 1.
-# Examples:
-   
-    A {red|blue} car.  # 50% chance for both red and blue
-    A {green|} bird.   # 50% chance for 'green' and 50% for empty string
-    {0.1::green|0.2::yellow|{pink|red}} background. # 10% chance for green, 20% for yellow and 70% for {pink|red}
-    {child|{jumping up|running} {cat|{large|small}dog}|boring human}. # nested posible with levels colored differently
+    A {red|blue} car.
+    A {green|} bird.
+    {0.1::green|0.2::yellow|{pink|red}} background.
+    {a child|{jumping|running} {cat|{large|small} dog}|a bored human}.
 
-## WILDCARDS
+## 2. WILDCARDS - pick one line from a text file
 
-# These pull a random non-empty line from a TXT file directly stored in 'wildcard_directory'.
-# They use double underscore delimiters and its content should be the filename without extension.
-# Single '#' comments still go until the end of the line, '#comment#' works inline, and '/# ... #/' comments can span several lines.
-/# This is a multi-line comment.
-   Everything here is ignored by VSmartPrompt. #/
-# When 'wildcard_directory\filename.txt' does not exist -> the __filename__ string will remain in the prompt.
-# Wildcards are highlighted as YELLOW when they point to a .txt file that exists - otherwise, RED. 
-# This highlight feature only supports up to 4 nested subfolders - wildcards pointing to deeper files will still work but show up as red.
-# You can add comments and combinations within wildcards but try to not create infinite loops when doing so - the node has safety against that though.
+# '__name__' pulls one random line from 'name.txt' in the wildcard directory.
+# Write the filename without the '.txt' extension, between double underscores.
+# Subfolders work: '__folder\subfolder\name__'.
+# A missing file is left in the prompt unchanged (and shows RED in the editor).
+# A pulled line may itself contain combinations, wildcards and variables.
 
-    __ThisIsAWildCard__ # pulls from 'wildcard_directory\ThisIsAWildCard.txt' but I don't have that file so this string will appear in the final prompt
-    __Folder1\Folder2\ThisIsAWildCard__ # sub-directory support - will pull from 'wildcard_directory\Folder1\Folder2\ThisIsAWildCard.txt'
+#     __animals__
+#     __clothing\dresses__
 
-## You can nest combinations and wildcards at will (ex: combination within wildcard within combination ...)
+# FILE FORMAT - this is where most mistakes happen:
+# A wildcard file is read LINE BY LINE and exactly ONE line is picked.
+# Put ONE option per line. Do not wrap the file in '{' '}' and do not start
+# lines with '|' - a block spread over several lines cannot work, because the
+# line is picked before anything is resolved.
+#
+#   correct file:            wrong file:
+#     a red dress              {
+#     a blue dress             a red dress
+#     a long coat              |a blue dress
+#                              }
+#
+# A combination inside a wildcard file is fine as long as it sits on ONE line:
+#     a {red|blue} dress
 
-## VARIABLES
+## 3. VARIABLES - roll once, reuse everywhere
 
-# Append '==<name>' right after a combination or wildcard to remember its resolved value.
-# The assignment still outputs its value where it stands - it just also saves it for reuse.
-# Reuse the value anywhere AFTER the assignment - even inside later combinations or wildcards - by writing <name>.
-# Names may contain letters, digits and underscores and are case-insensitive. Reassigning a name overwrites its value.
-# A <name> that is never assigned anywhere stays as-is in the output (and shows up RED in the editor).
-# Plain text works too: 'fore-head==<part>' stores the single word (no spaces) right before '=='.
-# That also works inside combination branches - only the SELECTED branch's assignment happens: her {face==<part>|fore-head==<part>|head==<part>}
-# For a fixed MULTI-WORD text use a single-choice combination: {crime scene}==<loc>
-# SILENT assignment: '==!<name>' stores the value but outputs NOTHING where it stands - only the <name> references output it.
-# NODE INPUTS: text connected to the in1..in6 input sockets is available here as <in1>..<in6> - chain VSmartPrompt nodes by wiring one's output into another's socket.
-# VARIABLE HAND-OVER: wire a node's 'variables' output into the next node's 'vars_in' input and every <name> it assigned works there too (and travels on down the chain).
-# TIP: typing '<' opens a dropdown with all assigned variables - type to filter, UP/DOWN + ENTER/TAB or click to insert, ESC to close.
+# '==<name>' after a construct stores its resolved value under that name.
+# The value is rolled ONCE and stays the same at every '<name>' you write.
+# Names may contain letters, digits and underscores, and are case-insensitive.
+#
+# Three ways to assign:
+#     {a|b}==<name>        stores the picked option
+#     __file__==<name>     stores the pulled line
+#     word==<name>         stores the single word right before '=='
+#
+# '==<name>' outputs the value where it stands AND stores it.
+# '==!<name>' stores it but outputs NOTHING there - only '<name>' outputs it.
+# A '<name>' you never assigned stays in the text as-is (and shows RED).
+# Assigning the same name twice: the last assignment wins.
 
-    {blonde|ginger}==<haircolor> hair            # picks one AND remembers the pick
+    {blonde|ginger}==<haircolor> hair
     her {light <haircolor>|dark <haircolor>} eyebrows match her <haircolor> hair
-    __names__==<girlname> enters. Say hi to <girlname>!
-    {sunny|rainy|foggy}==!<weather>              # rolls + remembers, outputs nothing here
+#     __names__==<girlname> enters. Say hi to <girlname>!
+    {sunny|rainy|foggy}==!<weather>
     the <weather> morning turns into a <weather> afternoon
 
-## SWITCHER (conditional blocks)
+## 4. SWITCHER - show a block only for certain values
 
-# Gate a combination or wildcard on a variable's value: glue '<name>==value::' DIRECTLY in front of it.
-# Value matches (case-insensitive) -> it resolves normally. No match -> the whole thing outputs nothing.
-# '<name>!=value::' is the NOT form: fires for every value EXCEPT the given one.
-# Several values act as OR - separate them with commas: '<surface>==counter,table,desk::{...}' fires for all three, '!=' then means none of them.
-# Assign the tag BEFORE the switch. Silent branch tags are perfect for this:
+# Glue '<name>==value::' DIRECTLY in front of a '{' or a '__wildcard__'.
+# Value matches -> the block resolves normally. No match -> nothing is output.
+#     '<name>!=value::'          fires for every value EXCEPT that one
+#     '<name>==a,b,c::'          fires for a OR b OR c
+#     '<name>!=a,b,c::'          fires for none of them
+# Values are compared case-insensitively. Assign the name BEFORE the switcher.
 
-    she is {cutting the wedding cake cake==!<act>|holding a champagne glas glass==!<act>|dancing dance==!<act>}.
+    she is {cutting the cake cake==!<act>|holding a glass glass==!<act>|dancing dance==!<act>}.
     <act>==cake::{she serves the cake|she cuts another slice}
-    <act>!=cake::{she is not near the cake}      # fires for glass AND dance
-    <act>==cake::__cake_actions__               # wildcards can be gated too
-    <act>==cake,cupcake,pie::{she picks up a fork}   # OR: fires for any of the listed values
+    <act>!=cake::{she is not near the cake}
+    <act>==cake,cupcake,pie::{she picks up a fork}
+#     <act>==cake::__cake_actions__      (a wildcard can be gated the same way)
 
-## Word weightning
-# This is already natively supported by ComfyUI - in case you didn't know, it reinforces the importance of the encased words.
-    (car or something:1.2) # Just showcasing that these are also highlighted
+## 5. COMMENTS
 
-    
-## Hotkeys/Shortcuts/Misc:
-#     - CTRL + Left Mouse Click on a Yellow wildcard -> opens the file with your default text editor (Notepad++ recommended)
-#     - CTRL + Left Mouse Click on a Red wildcard -> creates and opens the file with your default text editor (Notepad++ recommended)
-#     - Adjust Font Size with CTRL + Mouse Wheel Up/Down 
-#     - CTRL + UP/DOWN (on selected text) mimics ComfyUI's fast text weighting
+# Block comments run from /# to #/ and may span as many lines as you like.
+# The remaining forms are listed inside such a block, so that the hashes in the
+# examples cannot pair up with each other:
 
-## TIPS:
-#     - This node is (accidentally) fully compatible with subgraphs. This means you can actually add the 'prompt area' as a widget to the subgraph's widgets!
-#          To do so: place the node inside a subgraph then outside the subgraph -> right click on it -> Edit subgraph widgets -> Search 'vsmart' and turn the visibility ON for 'richprompt_widget_-1'
+/# comment forms, shown literally:
 
+     # text            comments out the rest of the line
+     word #note# on    two single hashes comment out just the phrase between them
+     ## text           headline style, to the end of the line
+     ### text          bigger headline style
+
+   Everything inside this block is removed before anything is resolved. #/
+
+## 6. RULES THAT ARE EASY TO GET WRONG
+
+# 6.1  '==<name>' binds ONLY to the ONE construct directly in front of it.
+#      wrong:   {__names__}, {__bodytypes__}==!<woman>     stores only the second block
+#      right:   {__names__, __bodytypes__}==!<woman>       stores the whole block
+#
+# 6.2  'word==<name>' takes exactly ONE word, with no spaces.
+#      wrong:   crime scene==<loc>        stores only 'scene'
+#      right:   {crime scene}==<loc>      stores 'crime scene'
+#
+# 6.3  A switcher must touch the '{' or '__' with no space in between.
+#      wrong:   <act>==cake:: she serves it      plain text is not gated
+#      right:   <act>==cake::{she serves it}
+#
+# 6.4  A switcher reads the value at its own position in the text, so the
+#      assignment must stand EARLIER in the prompt than the switcher.
+#
+# 6.5  A plain '<name>' reference works anywhere, even above its assignment -
+#      it always outputs the final value. Only switchers need the order.
+#
+# 6.6  An assignment inside a branch only happens if that branch is picked.
+#      In '{a==<v>|b==<v>}' exactly one of the two assignments fires.
+#
+# 6.7  Nesting is allowed everywhere: combinations in wildcards in
+#      combinations, switchers around nested blocks, and so on.
+
+## 7. WORKED EXAMPLE
+
+# Roll a person once, then describe her consistently and react to the setting.
+
+    {__names__, __bodytypes__}==!<woman>
+    {kitchen==!<room>|bedroom==!<room>|garden==!<room>}
+    <woman> stands in the <room>.
+    <room>==kitchen::{She is chopping vegetables|She is washing a plate}.
+    <room>==bedroom,garden::{She is looking out of the window}.
+    <room>!=kitchen::{There is no knife in sight}.
+
+## EDITOR
+
+#     CTRL + Click on a wildcard   opens its .txt in a built-in editor
+#                                  (creates the file if it does not exist yet;
+#                                   CTRL + ENTER saves, ESC closes)
+#     type '__'                    dropdown of the existing wildcard files
+#     type '<'                     dropdown of the assigned variables
+#     CTRL + F / CTRL + H          find and replace inside the prompt
+#     CTRL + Z / CTRL + SHIFT + Z  undo and redo
+#     CTRL + Mouse Wheel           font size
+#     CTRL + UP/DOWN on selection  ComfyUI text weighting, as in (word:1.2)
+#     after a run                  the picked options are marked white; hovering
+#                                  a wildcard or variable shows its rolled value
 """
 
 
