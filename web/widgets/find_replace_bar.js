@@ -181,7 +181,30 @@ export class FindReplaceBar {
 			this._button("✕", "Close (ESC)", () => this.close()),
 		);
 
-		this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, this.panel);
+		// Prompt slots: click loads, SHIFT+click saves. The bar stays dumb - the node
+		// owns the storage and answers through the api callbacks.
+		this.slotButtons = [];
+		if (this.api.slotCount) {
+			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, separator());
+			for (let index = 0; index < this.api.slotCount; index++) {
+				const button = document.createElement("button");
+				button.textContent = String(index + 1);
+				button.style.cssText = BUTTON_CSS;
+				button.addEventListener("mousedown", (e) => e.preventDefault());
+				button.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					this.api.onSlotClick?.(index, e.shiftKey);
+					this.refreshSlots();
+				});
+				this.slotButtons.push(button);
+				this.element.appendChild(button);
+			}
+			this.element.appendChild(this.panel);
+			this.refreshSlots();
+		} else {
+			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, this.panel);
+		}
 		document.body.appendChild(this.element);
 	}
 
@@ -196,6 +219,7 @@ export class FindReplaceBar {
 		this._reposition();
 		this._startTracking();
 		this.syncButtons();
+		this.refreshSlots();  // a loaded or copied node brings its own slots
 	}
 
 	cancelHide() {
@@ -248,6 +272,20 @@ export class FindReplaceBar {
 		const left = Math.max(4, Math.min(rect.right - width - 6, window.innerWidth - width - 4));
 		this.element.style.left = `${left}px`;
 		this.element.style.top = `${Math.max(4, rect.top + 4)}px`;
+	}
+
+	/** Re-reads every slot and updates its button (filled slots stand out). */
+	refreshSlots() {
+		if (!this.slotButtons?.length) return;
+		this.slotButtons.forEach((button, index) => {
+			const info = this.api.getSlotInfo?.(index) || {};
+			button.style.background = info.filled ? "#1f3f5a" : "#333";
+			button.style.color = info.filled ? "#8ec1ff" : "#777";
+			button.style.fontWeight = info.filled ? "bold" : "normal";
+			button.title = info.filled
+				? `Slot ${index + 1}: ${info.preview}\nsaved ${info.saved}\n\nclick = load, SHIFT+click = overwrite`
+				: `Slot ${index + 1} is empty\n\nSHIFT+click = save the current prompt here`;
+		});
 	}
 
 	syncButtons() {

@@ -1126,7 +1126,59 @@ app.registerExtension({
 			};
 
 			// --- FIND & REPLACE + UNDO/REDO TOOLBAR (CTRL+F / CTRL+H) ---------
+			// --- PROMPT SLOTS -------------------------------------------------
+			// Four prompt variants per node, kept in node.properties so they are
+			// serialized with the workflow (widgets cannot be used: onSerialize
+			// truncates widgets_values to the inherited layout length).
+			const SLOT_COUNT = 4;
+			const SLOT_PROPERTY = "valitools_slots";
+
+			const readSlots = () => {
+				try {
+					const parsed = JSON.parse(this.properties?.[SLOT_PROPERTY] || "[]");
+					return Array.isArray(parsed) ? parsed : [];
+				} catch {
+					return [];
+				}
+			};
+			const writeSlots = (slots) => {
+				this.properties = this.properties || {};
+				this.properties[SLOT_PROPERTY] = JSON.stringify(slots);
+				this.setDirtyCanvas(true, true);
+			};
+			// First line that carries actual prompt text, for the button tooltip
+			const slotPreview = (text) => {
+				const line = String(text || "").split("\n")
+					.map((l) => l.trim())
+					.find((l) => l && !l.startsWith("#") && !l.startsWith("/#"));
+				const preview = line || String(text || "").trim().split("\n")[0] || "";
+				return preview.length > 70 ? `${preview.substring(0, 69)}…` : preview;
+			};
+
 			findBar = new FindReplaceBar(editor, {
+				slotCount: SLOT_COUNT,
+				getSlotInfo: (index) => {
+					const slot = readSlots()[index];
+					if (!slot || !String(slot.text || "").trim()) return { filled: false };
+					return { filled: true, preview: slotPreview(slot.text), saved: slot.saved || "earlier" };
+				},
+				onSlotClick: (index, shiftKey) => {
+					const slots = readSlots();
+					if (shiftKey) {
+						// Saving an empty editor clears the slot - that is the delete gesture
+						const text = getEditorPlainText(editor);
+						while (slots.length < SLOT_COUNT) slots.push(null);
+						slots[index] = String(text).trim()
+							? { text, saved: new Date().toLocaleString() }
+							: null;
+						writeSlots(slots);
+						return;
+					}
+					const slot = slots[index];
+					if (!slot || !String(slot.text || "").trim()) return; // empty slot: do nothing
+					applyTextChange(slot.text, slot.text.length); // one undo step
+					editor.focus();
+				},
 				getText: () => getEditorPlainText(editor),
 				getCaret: () => getEditorSelectionState(editor)?.start ?? 0,
 				getSelectedText: () => {
