@@ -128,6 +128,101 @@ app.registerExtension({
 		// Switcher guard '<name>==value::' / '<name>!=value::' glued to a '{...}'
 		// block or '__wildcard__'. Must stay in sync with GUARD_*_PATTERN in nodes.py.
 		const GUARD_REGEX = /<([A-Za-z0-9_]+)>\s*(?:==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)/g;
+		// --- Output modes -------------------------------------------------
+		// The mode travels inside the prompt text as a comment directive
+		// ('/# mode: seedance #/'), because that is the only channel the backend
+		// sees: node properties never leave the frontend and the widget list is
+		// frozen by SILVER_SERIALIZED_WIDGET_COUNT. No directive = normal.
+		// Must stay in sync with nodes.py.
+		const MODE_NORMAL = "normal";
+		const MODE_H3_T2V = "h3_t2v";
+		const MODE_H3_R2V = "h3_r2v";
+		const MODE_SEEDANCE = "seedance";
+		const MODE_DIRECTIVE_REGEX = /(?:\/#|#)[ \t]*mode[ \t]*:[ \t]*([A-Za-z0-9 ._+-]{1,24}?)[ \t]*(?:#\/|#|$)/im;
+		const MODE_ALIASES = {
+			normal: MODE_NORMAL, off: MODE_NORMAL, none: MODE_NORMAL, plain: MODE_NORMAL,
+			h3: MODE_H3_T2V, "h3 t2v": MODE_H3_T2V, h3_t2v: MODE_H3_T2V, h3t2v: MODE_H3_T2V,
+			t2v: MODE_H3_T2V, hailuo3: MODE_H3_T2V, minimax: MODE_H3_T2V,
+			"h3 r2v": MODE_H3_R2V, h3_r2v: MODE_H3_R2V, h3r2v: MODE_H3_R2V, r2v: MODE_H3_R2V,
+			seedance: MODE_SEEDANCE, "seedance 2.0": MODE_SEEDANCE, seedance2: MODE_SEEDANCE,
+			seedance_2_0: MODE_SEEDANCE, sd2: MODE_SEEDANCE,
+		};
+		// Label -> directive text written into the prompt by the toolbar dropdown.
+		const MODE_CHOICES = [
+			{ id: MODE_NORMAL, label: "normal", directive: "normal" },
+			{ id: MODE_H3_T2V, label: "H3 t2v", directive: "h3 t2v" },
+			{ id: MODE_H3_R2V, label: "H3 r2v", directive: "h3 r2v" },
+			{ id: MODE_SEEDANCE, label: "Seedance 2.0", directive: "seedance" },
+		];
+
+		const detectPromptMode = (text) => {
+			if (!text || !/mode/i.test(text)) return MODE_NORMAL;
+			const match = MODE_DIRECTIVE_REGEX.exec(text);
+			if (!match) return MODE_NORMAL;
+			const key = match[1].trim().toLowerCase().replace(/\s+/g, " ");
+			return MODE_ALIASES[key] || MODE_ALIASES[key.replace(/ /g, "_")] || MODE_NORMAL;
+		};
+
+		/** Rewrites the directive in place, or puts a new one on the first line. */
+		const writePromptMode = (text, modeId) => {
+			const choice = MODE_CHOICES.find((entry) => entry.id === modeId) || MODE_CHOICES[0];
+			const source = String(text || "");
+			const match = MODE_DIRECTIVE_REGEX.exec(source);
+			if (match) {
+				if (modeId === MODE_NORMAL) {
+					// Drop the whole directive line when it carries nothing else
+					const lineStart = source.lastIndexOf("\n", match.index) + 1;
+					const lineEndIndex = source.indexOf("\n", match.index);
+					const lineEnd = lineEndIndex === -1 ? source.length : lineEndIndex;
+					const rest = (source.slice(lineStart, match.index) + source.slice(match.index + match[0].length, lineEnd)).trim();
+					if (!rest) return source.slice(0, lineStart) + source.slice(Math.min(lineEnd + 1, source.length));
+				}
+				return source.slice(0, match.index) + `/# mode: ${choice.directive} #/` + source.slice(match.index + match[0].length);
+			}
+			if (modeId === MODE_NORMAL) return source;
+			return `/# mode: ${choice.directive} #/\n${source}`;
+		};
+
+		// Literal (non-rolling) braces in Seedance mode, mirroring nodes.py: a group
+		// rolls only with a top-level '|' or '::' weight, or a following '==<name>'.
+		const SEEDANCE_BRACE_OPEN = "\ue020";
+		const SEEDANCE_BRACE_CLOSE = "\ue021";
+		const SEEDANCE_ASSIGN_AFTER_REGEX = /^\s*==\s*!?<[A-Za-z0-9_]+>/;
+		const maskSeedanceLiteralBraces = (text) => {
+			if (text.indexOf("{") === -1) return text;
+			const chars = text.split("");
+			const stack = [];
+			for (let i = 0; i < text.length; i++) {
+				const char = text[i];
+				if (char === "{") {
+					stack.push([i, false]);
+				} else if (char === "}") {
+					if (!stack.length) continue;
+					const [openIndex, rolls] = stack.pop();
+					if (!rolls && !SEEDANCE_ASSIGN_AFTER_REGEX.test(text.slice(i + 1, i + 40))) {
+						chars[openIndex] = SEEDANCE_BRACE_OPEN;
+						chars[i] = SEEDANCE_BRACE_CLOSE;
+					}
+				} else if (stack.length && (char === "|" || (char === ":" && text.startsWith("::", i)))) {
+					stack[stack.length - 1][1] = true; // innermost group only
+				}
+			}
+			return chars.join("");
+		};
+
+		// H3 speech / structure tags share the '<name>' shape with variable references.
+		// Multi-word tags ('<long pause>') never match the variable regex anyway; they
+		// are listed so the highlighter can colour them. Mirrors H3_RESERVED_TAGS.
+		const H3_TAGS = new Set([
+			"d", "i", "scenetrans", "cutoff", "style", "opening",
+			"pause", "long pause", "breath", "inhale", "exhale", "deep breath",
+			"catches breath", "pant", "pants", "phew",
+			"whisper", "softer", "humming", "stutter",
+			"laughs", "chuckle", "sighs", "gasp", "uh", "mhm", "coughs",
+			"clears throat", "sniff", "smacks lips",
+		]);
+		const H3_TAG_REGEX = /<\/?[A-Za-z][A-Za-z0-9_ ]{0,24}>/g;
+
 		const variableStyle = "color:#DA70D6; font-weight:bold;";
 		// String input sockets usable as variables in the text (<in1>..<in4>)
 		const INPUT_VAR_NAMES = ["in1", "in2", "in3", "in4", "in5", "in6"];
@@ -261,6 +356,22 @@ app.registerExtension({
 			// 1) Structural highlighting (comments, wildcards, tags)
 			// ------------------------
 			work = highlightComments(work);
+
+			// Mode-specific rules. Both only ever fire when the prompt carries a
+			// '/# mode: ... #/' directive, so a plain prompt renders exactly as before.
+			const promptMode = detectPromptMode(text);
+			if (promptMode === MODE_SEEDANCE) {
+				// Literal braces are taken out of the combination highlighter and put
+				// back as their own colour after the token restore below.
+				work = maskSeedanceLiteralBraces(work);
+			} else if (promptMode === MODE_H3_T2V || promptMode === MODE_H3_R2V) {
+				// Speech and structure tags, before the variable rules claim them
+				work = work.replace(H3_TAG_REGEX, (match) => {
+					const name = match.replace(/[<>/]/g, "").toLowerCase().trim();
+					if (!H3_TAGS.has(name)) return match;
+					return protect(`<span style="color:#40E0D0; font-weight:bold;">${escapeHTML(match)}</span>`);
+				});
+			}
 
 			// Switcher guards: '<name>==value::' glued to a following block or wildcard.
 			// Must run before wildcard/variable rules (they'd eat the '<name>' part).
@@ -458,6 +569,14 @@ app.registerExtension({
 			const selectedChoiceStyle = "background:#f2f2f2; color:#111111; border-radius:2px; padding:0 1px;";
 			work = work.split(SILVER_SELECTED_RANGE_START).join(`<span style="${selectedChoiceStyle}">`)
 					.split(SILVER_SELECTED_RANGE_END).join(`</span>`);
+
+			if (promptMode === MODE_SEEDANCE) {
+				// Own colour, clearly apart from the rolling '{...}' frames: what shows
+				// up blue here reaches Seedance verbatim (spoken lines, ...).
+				const literalBraceStyle = "color:#8AB4F8; font-weight:bold; background:rgba(138,180,248,0.14); border-radius:2px;";
+				work = work.split(SEEDANCE_BRACE_OPEN).join(`<span style="${literalBraceStyle}">{</span>`)
+						.split(SEEDANCE_BRACE_CLOSE).join(`<span style="${literalBraceStyle}">}</span>`);
+			}
 		
 			return work;
 		};
@@ -1014,6 +1133,7 @@ app.registerExtension({
 				textHistory.lastTime = now;
 				textHistory.lastWasTyping = isTyping;
 				findBar?.syncButtons();
+				findBar?.refreshMode();  // the directive can also be typed by hand
 			};
 
 			const historyApply = (entry) => {
@@ -1030,6 +1150,7 @@ app.registerExtension({
 				}
 				textHistory.lastWasTyping = false;
 				findBar?.syncButtons();
+				findBar?.refreshMode();
 			};
 
 			const canUndo = () => textHistory.index > 0;
@@ -1052,6 +1173,7 @@ app.registerExtension({
 				invalidateWildcardValidation();
 				updateEditorContent();
 				historyRecord(prompt_widget.value, cursor, false);
+				findBar?.refreshMode();
 			};
 
 			historyReset();
@@ -1156,6 +1278,14 @@ app.registerExtension({
 			};
 
 			findBar = new FindReplaceBar(editor, {
+				modes: MODE_CHOICES.map(({ id, label }) => ({ id, label })),
+				getMode: () => detectPromptMode(prompt_widget.value || ""),
+				setMode: (modeId) => {
+					const current = prompt_widget.value || "";
+					const updated = writePromptMode(current, modeId);
+					if (updated === current) return;
+					applyTextChange(updated, updated.length); // one undo step
+				},
 				slotCount: SLOT_COUNT,
 				getSlotInfo: (index) => {
 					const slot = readSlots()[index];

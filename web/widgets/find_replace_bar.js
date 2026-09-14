@@ -112,6 +112,28 @@ export class FindReplaceBar {
 			if (!this.open) this.element.style.opacity = "0.55";
 		});
 
+		// Output mode: normal / H3 / Seedance. The node stores it as a comment
+		// directive inside the prompt text, the bar only shows and sets it.
+		this.modeSelect = null;
+		if (Array.isArray(this.api.modes) && this.api.modes.length) {
+			const select = document.createElement("select");
+			select.title = "Output syntax mode - written into the prompt as '/# mode: ... #/'";
+			select.style.cssText = `${BUTTON_CSS} padding: 2px 4px; min-width: 88px;`;
+			for (const mode of this.api.modes) {
+				const option = document.createElement("option");
+				option.value = mode.id;
+				option.textContent = mode.label;
+				select.appendChild(option);
+			}
+			select.addEventListener("mousedown", (e) => e.stopPropagation());
+			select.addEventListener("keydown", (e) => e.stopPropagation());
+			select.addEventListener("change", () => {
+				this.api.setMode?.(select.value);
+				this.refreshMode();
+			});
+			this.modeSelect = select;
+		}
+
 		this.undoButton = this._button("↶", "Undo (CTRL+Z)", () => this.api.undo());
 		this.redoButton = this._button("↷", "Redo (CTRL+SHIFT+Z)", () => this.api.redo());
 		this.findButton = this._button("⌕", "Find & replace (CTRL+F)", () => this.openFind(false));
@@ -185,6 +207,7 @@ export class FindReplaceBar {
 		// owns the storage and answers through the api callbacks.
 		this.slotButtons = [];
 		if (this.api.slotCount) {
+			if (this.modeSelect) this.element.append(this.modeSelect, separator());
 			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, separator());
 			for (let index = 0; index < this.api.slotCount; index++) {
 				const button = document.createElement("button");
@@ -203,6 +226,7 @@ export class FindReplaceBar {
 			this.element.appendChild(this.panel);
 			this.refreshSlots();
 		} else {
+			if (this.modeSelect) this.element.append(this.modeSelect, separator());
 			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, this.panel);
 		}
 		document.body.appendChild(this.element);
@@ -219,6 +243,7 @@ export class FindReplaceBar {
 		this._reposition();
 		this._startTracking();
 		this.syncButtons();
+		this.refreshMode();
 		this.refreshSlots();  // a loaded or copied node brings its own slots
 	}
 
@@ -275,6 +300,16 @@ export class FindReplaceBar {
 	}
 
 	/** Re-reads every slot and updates its button (filled slots stand out). */
+	/** Pulls the mode back out of the prompt text (it can also be typed by hand). */
+	refreshMode() {
+		if (!this.modeSelect) return;
+		const current = this.api.getMode?.() || this.api.modes[0].id;
+		if (this.modeSelect.value !== current) this.modeSelect.value = current;
+		const isDefault = current === this.api.modes[0].id;
+		this.modeSelect.style.color = isDefault ? "#ddd" : "#ffd166";
+		this.modeSelect.style.borderColor = isDefault ? "#555" : "#8a6d1f";
+	}
+
 	refreshSlots() {
 		if (!this.slotButtons?.length) return;
 		this.slotButtons.forEach((button, index) => {

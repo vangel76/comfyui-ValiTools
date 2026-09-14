@@ -21,12 +21,13 @@ LORA_PATTERN = re.compile(
 VARIABLE_ASSIGN_PATTERN = re.compile(r'\s*==\s*(!)?<([A-Za-z0-9_]+)>')  # used with .match() right after a combination
 VARIABLE_REF_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>')
 # 'word==<name>' on fully resolved text: captures the single word right before '=='
-LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=]+)\s*==\s*(!)?<([A-Za-z0-9_]+)>')
+# (\ue020/\ue021 are Seedance's masked literal braces - never part of a value)
+LITERAL_ASSIGN_PATTERN = re.compile(r'([^\s{}|<>=\ue020\ue021]+)\s*==\s*(!)?<([A-Za-z0-9_]+)>')
 # Switcher guard: '<name>==value::' / '<name>!=value::' glued to a following '{...}'
 # block or '__wildcard__' gates it on the variable's value (case-insensitive).
 # Must stay in sync with nodes.js.
-GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::\Z')  # lookback, anchored at construct start
-GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n]*?)::(?=\{|__)')  # final sweep
+GUARD_BEFORE_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n\ue020\ue021]*?)::\Z')  # lookback, anchored at construct start
+GUARD_SCAN_PATTERN = re.compile(r'<([A-Za-z0-9_]+)>\s*(==|!=)\s*([^:{}|<>\n\ue020\ue021]*?)::(?=\{|__)')  # final sweep
 
 DEFAULT_PROMPT = r"""### VSmartPrompt syntax. '#' lines are comments and never reach the output.
 ### AI: follow these rules literally, then output only the prompt itself.
@@ -83,6 +84,16 @@ DEFAULT_PROMPT = r"""### VSmartPrompt syntax. '#' lines are comments and never r
     <woman> stands in the <room>.
     <room>==kitchen::{She is chopping vegetables|She is washing a plate}.
     <room>!=kitchen::{There is no knife in sight}.
+
+## OUTPUT MODE - target model syntax, set with the dropdown in the editor toolbar
+#   /# mode: seedance #/   put this directive anywhere; omit it for normal output
+#   normal    everything above, nothing else
+#   h3 t2v / h3 r2v   H3 speech and structure tags (<d>, <i>, <breath>, ...) are
+#             never read as variables, even if a variable of that name exists
+#   seedance  '{...}' stays literal text unless it holds a '|' or a '::' weight,
+#             or an '==<v>' follows it - so spoken lines like {Hello, world}
+#             reach the output unchanged. Literal braces are blue in the editor.
+#   the full syntax above keeps working in every mode
 
 ## EDITOR
 #   CTRL+Click a wildcard edits its file. Type '__' or '<' for a dropdown.
@@ -162,6 +173,91 @@ def resolve_wildcard_file_path(wildcard_dir: str, wildcard_name: str) -> str | N
     return None
 
 
+# --- Output modes ----------------------------------------------------------
+# The target model of a prompt is carried inside the prompt text as a comment
+# directive ('/# mode: seedance #/'). The text is the only channel that reaches
+# the backend: node properties are frontend-only and the widget list is frozen
+# by SILVER_SERIALIZED_WIDGET_COUNT. A prompt without a directive is 'normal'
+# and every mode-specific rule below is skipped, so existing workflows resolve
+# byte-identically to before.
+# Must stay in sync with web/nodes/nodes.js.
+MODE_NORMAL = "normal"
+MODE_H3_T2V = "h3_t2v"
+MODE_H3_R2V = "h3_r2v"
+MODE_SEEDANCE = "seedance"
+
+MODE_DIRECTIVE_PATTERN = re.compile(
+    r'(?:/#|#)\s*mode\s*:\s*([A-Za-z0-9 ._+-]{1,24}?)\s*(?:#/|#|$)',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_MODE_ALIASES = {
+    "normal": MODE_NORMAL, "off": MODE_NORMAL, "none": MODE_NORMAL, "plain": MODE_NORMAL,
+    "h3": MODE_H3_T2V, "h3 t2v": MODE_H3_T2V, "h3_t2v": MODE_H3_T2V, "h3t2v": MODE_H3_T2V,
+    "t2v": MODE_H3_T2V, "hailuo3": MODE_H3_T2V, "minimax": MODE_H3_T2V,
+    "h3 r2v": MODE_H3_R2V, "h3_r2v": MODE_H3_R2V, "h3r2v": MODE_H3_R2V, "r2v": MODE_H3_R2V,
+    "seedance": MODE_SEEDANCE, "seedance 2.0": MODE_SEEDANCE, "seedance2": MODE_SEEDANCE,
+    "seedance_2_0": MODE_SEEDANCE, "sd2": MODE_SEEDANCE,
+}
+
+
+def detect_prompt_mode(text: str) -> str:
+    """Reads the '/# mode: ... #/' directive. Unknown or missing -> normal."""
+    if not text or "mode" not in text.lower():
+        return MODE_NORMAL
+    match = MODE_DIRECTIVE_PATTERN.search(text)
+    if match is None:
+        return MODE_NORMAL
+    key = re.sub(r"\s+", " ", match.group(1).strip().lower())
+    return _MODE_ALIASES.get(key, _MODE_ALIASES.get(key.replace(" ", "_"), MODE_NORMAL))
+
+
+# H3 writes speech and structure tags in the same '<name>' shape as a variable
+# reference. Only names that are actually assigned get substituted anyway, so
+# the risk is limited to collisions - these names are never substituted in H3
+# mode even when a variable of the same name exists.
+H3_RESERVED_TAGS = frozenset({
+    "d", "i", "scenetrans", "cutoff", "style", "opening",
+    "pause", "breath", "inhale", "exhale", "pant", "pants", "phew",
+    "whisper", "softer", "humming", "stutter",
+    "laughs", "chuckle", "sighs", "gasp", "uh", "mhm", "coughs", "sniff",
+})
+
+# Seedance puts spoken lines in braces ('{Hello, world}'), which collides with
+# the combination syntax. In Seedance mode a brace group only rolls when it
+# carries a top-level '|' or a '::' weight, or when a '==<name>' assignment
+# follows it; every other pair is literal. Literal braces are swapped to these
+# private-use chars for the whole run - one char for one char, so source_map
+# and wildcard_origin_map stay valid - and swapped back at the very end.
+SEEDANCE_BRACE_OPEN, SEEDANCE_BRACE_CLOSE = "\ue020", "\ue021"
+_SEEDANCE_UNMASK = str.maketrans({SEEDANCE_BRACE_OPEN: "{", SEEDANCE_BRACE_CLOSE: "}"})
+
+
+def mask_seedance_literal_braces(text: str) -> str:
+    """Hides non-rolling '{...}' pairs from the resolver. Length-preserving."""
+    if "{" not in text:
+        return text
+    chars = list(text)
+    stack: list[list] = []  # [open_index, rolls]
+    for index, char in enumerate(text):
+        if char == "{":
+            stack.append([index, False])
+        elif char == "}":
+            if not stack:
+                continue
+            open_index, rolls = stack.pop()
+            if not rolls and VARIABLE_ASSIGN_PATTERN.match(text, index + 1) is None:
+                chars[open_index] = SEEDANCE_BRACE_OPEN
+                chars[index] = SEEDANCE_BRACE_CLOSE
+        elif stack and (char == "|" or (char == ":" and text.startswith("::", index))):
+            stack[-1][1] = True  # innermost group only
+    return "".join(chars)
+
+
+def unmask_seedance_literal_braces(text: str) -> str:
+    return text.translate(_SEEDANCE_UNMASK)
+
+
 def remove_lora_patterns_from_prompt(prompt: str) -> str:
     return LORA_PATTERN.sub("", prompt)
 
@@ -178,6 +274,9 @@ def dynamic_prompts(
     preset_variables: dict[str, str] | None = None) -> str | tuple[str, list[list[int]], list[dict[str, str | int]]]:
 
     wildcard_dir = normalize_wildcard_directory(wildcard_dir)
+    # Read once, before anything touches the text: the directive is a comment
+    # and comment stripping runs further down.
+    mode = detect_prompt_mode(prompt)
     # ONE RNG stream for the whole run. Never reseed mid-run: reseeding per pass
     # replays the same draw sequence and locks picks of different passes together
     # (e.g. a nested wildcard's line pick was 100% correlated with its parent's).
@@ -515,7 +614,11 @@ def dynamic_prompts(
             if tail.endswith("=="):
                 continue  # '<name>' belongs to a pending 'word==<name>' / 'word==!<name>' assignment
 
-            value = variables.get(match.group(1).lower())
+            name = match.group(1).lower()
+            if mode in (MODE_H3_T2V, MODE_H3_R2V) and name in H3_RESERVED_TAGS:
+                continue  # H3 speech/structure tag, not a variable reference
+
+            value = variables.get(name)
             if value is None:
                 continue  # unknown name stays literal
 
@@ -1278,6 +1381,10 @@ def dynamic_prompts(
     if "#" in prompt:
         prompt, source_map, wildcard_origin_map = _strip_all_comments(prompt, source_map, wildcard_origin_map)
 
+    if mode == MODE_SEEDANCE:
+        # One char for one char - source_map / wildcard_origin_map stay aligned.
+        prompt = mask_seedance_literal_braces(prompt)
+
     # NOTE: reference substitution deliberately happens only AFTER the resolution loop:
     # substituting during the loop would fill '<name>' inside not-yet-captured
     # 'word==<name>' assignments and freeze references to stale values.
@@ -1405,7 +1512,10 @@ def dynamic_prompts(
         remove_whitespaces=remove_whitespaces, 
         remove_empty_tags=remove_empty_tags
     )
-    
+
+    if mode == MODE_SEEDANCE:
+        prompt = unmask_seedance_literal_braces(prompt)
+
     if return_trace:
         selected_ranges = _filter_selected_ranges_to_source_map(selected_ranges, source_map)
         selected_ranges.sort(key=lambda item: (item[0], item[1]))
