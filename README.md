@@ -14,6 +14,7 @@ A Dynamic Prompts node with a rich-text (syntax-highlighted) prompt editor.
 - **Comments**: `#` to end of line, inline `#comment#`, `##`/`###` headline styles, or multi-line `/# comment #/` blocks
 - **Find & replace + undo/redo**: hovering or focusing the editor shows a small toolbar (undo / redo / find). `CTRL+F` opens find, `CTRL+H` jumps straight to the replace field; `ENTER` / `SHIFT+ENTER` step through matches, `Aa` toggles case sensitivity, `⧉` restricts find & replace to the selected text (a multi-line selection sets this automatically), `ESC` closes. The `⎘` button copies the whole prompt as plain text. Undo/redo works via the buttons or `CTRL+Z` / `CTRL+SHIFT+Z` / `CTRL+Y` (typing bursts collapse into one step)
 - **Prompt slots**: four numbered buttons in the editor toolbar hold four prompt variants per node. Click loads a slot (one undo step, so `CTRL+Z` brings the old text back), SHIFT+Click saves the current prompt into it, and SHIFT+Click with an empty editor clears it. Filled slots are highlighted and their tooltip shows a preview plus the save time. The slots live in the node's properties, so they are saved with the workflow and copied along with the node
+- **Output cleanup switches work again**: `single_line_output`, `remove_whitespaces` and `remove_empty_tags` were forced on in code, which made the widgets decorative. Turn `single_line_output` off to keep the line structure (MiniMax H3 field blocks, Seedance shot lists); turn `remove_whitespaces` off to keep blank lines as well. Multi-line combinations resolve identically either way
 - **Post-run feedback**: the branches actually selected during execution are marked in the editor; resolved wildcards show their pulled line on hover; variables (assignments, references and switcher conditions) show their rolled value on hover
 - **String inputs**: six optional input sockets `in1`-`in6`; connected text is available in the prompt as `<in1>`-`<in6>` (inserted as-is, not re-resolved) - chain VSmartPrompt nodes by wiring one's output into another's socket
 - **Variable hand-over**: wire a node's `variables` output into the next node's `vars_in` input and every `<name>` it assigned works there too - references, switcher conditions and all. Inherited variables travel on down the chain; a local assignment to the same name wins
@@ -86,6 +87,8 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
+- v1.17.0
+  - VSmartPrompt: `single_line_output`, `remove_whitespaces` and `remove_empty_tags` are honoured again - they were overwritten with True in `main()`, so the widgets did nothing and every output was flattened onto one line. Empty lines were also dropped unconditionally instead of following `remove_whitespaces`. Defaults are unchanged, so existing workflows keep their current output
 - v1.16.0
   - VSmartPrompt: four prompt slots per node - numbered buttons in the editor toolbar, click to load, SHIFT+Click to save, SHIFT+Click with an empty editor to clear. Stored in the node's properties, so they travel with the workflow and with a copied node; loading is a single undo step
 - v1.15.2

@@ -709,13 +709,12 @@ def dynamic_prompts(
                 while ("  " in trimmed_line):
                     trimmed_line = trimmed_line.replace("  ", " ")
     
-            # Apply the specified line_suffix
+            # Empty lines are only dropped when the switch asks for it - this used to
+            # happen unconditionally, so a blank line could never survive.
             if trimmed_line:
-                # Only add suffix if the line is not empty after stripping
-                final_line = trimmed_line + line_suffix
-                
-                # Only add non-empty lines to the cleaned list
-                cleaned_lines.append(final_line)
+                cleaned_lines.append(trimmed_line + line_suffix)
+            elif not remove_whitespaces:
+                cleaned_lines.append(trimmed_line)
     
         # Convert the cleaned lines back into a single/multi-line string
         # Join with " " for single line output, or "\n" for multi-line output
@@ -1427,8 +1426,8 @@ class VSmartPrompt:
                 "available_loras_stem": ("STRING", {"default": "", "dynamicPrompts": False, "tooltip": "Compatibility placeholder for older workflows. This field is kept only to preserve widget ordering."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Same seed + same prompt + same connected in1-in6 texts always returns the same output prompt. Changed input text re-rolls the picks even with a fixed seed."}),
                 "line_suffix": ("STRING", {"multiline": False, "default": "", "dynamicPrompts": False, "tooltip": "Appends this string to the end of every line. Useful to automate suffixing of tags and descriptive text with either commas or single dots."}),
-                "single_line_output": ("BOOLEAN", {"default": True, "tooltip": "This must be True for multi-line combinations to work."}),
-                "remove_whitespaces": ("BOOLEAN", {"default": True, "tooltip": "Trims every line and converts multiple spaces to single space, ex: '   ' -> ' '. Also removes empty lines."}),
+                "single_line_output": ("BOOLEAN", {"default": True, "tooltip": "Join all lines into one with spaces. Turn OFF to keep the line structure, e.g. for MiniMax H3 field blocks or Seedance shot lists. Multi-line combinations resolve the same either way."}),
+                "remove_whitespaces": ("BOOLEAN", {"default": True, "tooltip": "Trim every line and collapse runs of spaces, and drop empty lines. Turn OFF to keep blank lines, e.g. between H3 field blocks."}),
                 "remove_empty_tags": ("BOOLEAN", {"default": True, "tooltip": "'tags' here is anything between dots or commas. Fixes cases like this: 'cat,,  , dog' -> 'cat, dog'."}),
                 "load_loras_from_prompt": ("BOOLEAN", {"default": True, "tooltip": "Compatibility placeholder for older workflows. LoRA loading is no longer handled by this node."}),
                 "remove_loras_pattern": ("BOOLEAN", {"default": True, "tooltip": "Compatibility placeholder for older workflows. When enabled, LoRA tags are stripped from the final prompt text."}),
@@ -1458,9 +1457,9 @@ INPUTS:
 
 line_suffix: Appends this string to the end of every line. Useful to automate suffixing of tags and descriptive text with either commas or single dots.
 
-single_line_output: This must be True for multi-line combinations to work.
+single_line_output: Join all lines into one. Turn OFF to keep the line structure (H3 fields, Seedance shot lists). Multi-line combinations work either way.
 
-remove_whitespaces: Trims every line and converts multiple spaces to single space, ex: '   ' -> ' '. Also removes empty lines.
+remove_whitespaces: Trim lines, collapse runs of spaces, drop empty lines. Turn OFF to keep blank lines.
 
 remove_empty_tags: 'tags' here is anything between dots or commas. Fixes cases like this: 'cat,,  , dog' -> 'cat, dog'.
 
@@ -1484,9 +1483,9 @@ wildcard_directory: The directory where TXT wildcard files are stored.
         _ = available_loras_stem, load_loras_from_prompt
         # Skipped (unused) lazy inputs arrive as None - treated like unconnected ones.
         socket_values = {name: kwargs.get(name) for name in self.INPUT_SOCKET_NAMES}
-        single_line_output = True
-        remove_whitespaces = True
-        remove_empty_tags = True
+        # The three cleanup switches used to be forced on here, which made the widgets
+        # decorative. They are honoured again: multi-line combinations resolve exactly
+        # the same either way, so nothing about the random machinery depends on them.
         wildcard_directory = normalize_wildcard_directory(wildcard_directory)
 
         # Variables handed over by an upstream VSmartPrompt through 'vars_in'. They
