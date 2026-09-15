@@ -91,8 +91,9 @@ DEFAULT_PROMPT = r"""### VSmartPrompt syntax. '#' lines are comments and never r
 #   h3 t2v / h3 r2v   H3 speech and structure tags (<d>, <i>, <breath>, ...) are
 #             never read as variables, even if a variable of that name exists
 #   seedance  '{...}' stays literal text unless it holds a '|' or a '::' weight,
-#             or an '==<v>' follows it - so spoken lines like {Hello, world}
-#             reach the output unchanged. Literal braces are blue in the editor.
+#             an '==<v>' follows it, or a switcher guard '<v>==x::' precedes it -
+#             so spoken lines like {Hello, world} reach the output unchanged
+#             while gated blocks still switch. Literal braces are blue in the editor.
 #   the full syntax above keeps working in every mode
 
 ## EDITOR
@@ -186,8 +187,11 @@ MODE_H3_T2V = "h3_t2v"
 MODE_H3_R2V = "h3_r2v"
 MODE_SEEDANCE = "seedance"
 
+# The directive must open its line: the syntax reference in DEFAULT_PROMPT quotes
+# it inside a '#' comment, and an unanchored match switched the demo text into
+# Seedance mode. Must stay in sync with MODE_DIRECTIVE_REGEX in nodes.js.
 MODE_DIRECTIVE_PATTERN = re.compile(
-    r'(?:/#|#)\s*mode\s*:\s*([A-Za-z0-9 ._+-]{1,24}?)\s*(?:#/|#|$)',
+    r'^[ \t]*(?:/#|#)\s*mode\s*:\s*([A-Za-z0-9 ._+-]{1,24}?)\s*(?:#/|#|$)',
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -198,6 +202,7 @@ _MODE_ALIASES = {
     "h3 r2v": MODE_H3_R2V, "h3_r2v": MODE_H3_R2V, "h3r2v": MODE_H3_R2V, "r2v": MODE_H3_R2V,
     "seedance": MODE_SEEDANCE, "seedance 2.0": MODE_SEEDANCE, "seedance2": MODE_SEEDANCE,
     "seedance_2_0": MODE_SEEDANCE, "sd2": MODE_SEEDANCE,
+    "seedance 2.5": MODE_SEEDANCE, "seedance25": MODE_SEEDANCE, "seedance_2_5": MODE_SEEDANCE, "sd25": MODE_SEEDANCE,
 }
 
 
@@ -234,14 +239,20 @@ _SEEDANCE_UNMASK = str.maketrans({SEEDANCE_BRACE_OPEN: "{", SEEDANCE_BRACE_CLOSE
 
 
 def mask_seedance_literal_braces(text: str) -> str:
-    """Hides non-rolling '{...}' pairs from the resolver. Length-preserving."""
+    """Hides non-rolling '{...}' pairs from the resolver. Length-preserving.
+
+    A group glued to a switcher guard ('<name>==value::{...}') is never literal:
+    the guard needs the real brace to fire, and a single-choice block is the
+    normal way to gate a fixed sentence. Mirrors maskSeedanceLiteralBraces in nodes.js.
+    """
     if "{" not in text:
         return text
     chars = list(text)
     stack: list[list] = []  # [open_index, rolls]
     for index, char in enumerate(text):
         if char == "{":
-            stack.append([index, False])
+            guarded = GUARD_BEFORE_PATTERN.search(text[max(0, index - 96):index]) is not None
+            stack.append([index, guarded])
         elif char == "}":
             if not stack:
                 continue
@@ -249,13 +260,35 @@ def mask_seedance_literal_braces(text: str) -> str:
             if not rolls and VARIABLE_ASSIGN_PATTERN.match(text, index + 1) is None:
                 chars[open_index] = SEEDANCE_BRACE_OPEN
                 chars[index] = SEEDANCE_BRACE_CLOSE
-        elif stack and (char == "|" or (char == ":" and text.startswith("::", index))):
+        elif stack and (
+            char == "|"
+            or (char == ":" and text.startswith("::", index))
+            # An assignment inside the group ('{b==!<v>}') makes it a real block:
+            # left literal, the resolver would eat the assignment and leave '{}'.
+            or (char == "=" and text.startswith("==", index) and VARIABLE_ASSIGN_PATTERN.match(text, index) is not None)
+        ):
             stack[-1][1] = True  # innermost group only
     return "".join(chars)
 
 
 def unmask_seedance_literal_braces(text: str) -> str:
     return text.translate(_SEEDANCE_UNMASK)
+
+
+def _touches_ellipsis(text: str, start: int, end: int) -> bool:
+    """True when any '.' inside text[start:end] belongs to a run of 3+ dots."""
+    for index in range(start, end):
+        if text[index] != ".":
+            continue
+        left = index
+        while left > 0 and text[left - 1] == ".":
+            left -= 1
+        right = index
+        while right + 1 < len(text) and text[right + 1] == ".":
+            right += 1
+        if right - left + 1 >= 3:
+            return True
+    return False
 
 
 def remove_lora_patterns_from_prompt(prompt: str) -> str:
@@ -865,7 +898,12 @@ def dynamic_prompts(
                         tag_end_index = temp_prompt.find('>', tag_start_index)
                         if tag_end_index != -1 and tag_end_index > start:
                             continue
-    
+
+                    # An ellipsis ('...' or longer) is intentional dialogue punctuation,
+                    # never an empty tag: leave every dot run of three or more alone.
+                    if "." in old_substring and _touches_ellipsis(temp_prompt, start, end):
+                        continue
+
                     replacements_to_make_in_this_pass.append((start, end, new_substring))
     
     
@@ -881,8 +919,16 @@ def dynamic_prompts(
         
         # --- Logic for remove_empty_tags ---
         if remove_empty_tags:
-            temp_prompt = prompt
-            
+            # Ellipses ('...' and longer) are dialogue punctuation, not empty tags.
+            # They are parked as a private-use char while the separator cleanup runs
+            # and put back afterwards, so 'No... wait...' survives with the switch on.
+            ELLIPSIS_MARK = ""
+            parked_ellipses: list[str] = []
+            def _park_ellipsis(match: re.Match) -> str:
+                parked_ellipses.append(match.group(0))
+                return ELLIPSIS_MARK
+            temp_prompt = re.sub(r"\.{3,}", _park_ellipsis, prompt)
+
             # Simple cleanup of spacing before running the final delimiter removal
             temp_prompt = temp_prompt.replace(", ", ",").replace(" ,", ",").replace(" .", ".").replace(". ", ".")
             temp_prompt = temp_prompt.replace(",", ", ")
@@ -900,6 +946,8 @@ def dynamic_prompts(
             
             # Final cleaning of delimiters (e.g. 'cat,, dog' -> 'cat, dog')
             temp_prompt = temp_prompt.replace(",,", ",").replace("..", ".")
+            for run in parked_ellipses:
+                temp_prompt = temp_prompt.replace(ELLIPSIS_MARK, run, 1)
             prompt = temp_prompt
             
             
@@ -1538,7 +1586,7 @@ class VSmartPrompt:
                 "line_suffix": ("STRING", {"multiline": False, "default": "", "dynamicPrompts": False, "tooltip": "Appends this string to the end of every line. Useful to automate suffixing of tags and descriptive text with either commas or single dots."}),
                 "single_line_output": ("BOOLEAN", {"default": True, "tooltip": "Join all lines into one with spaces. Turn OFF to keep the line structure, e.g. for MiniMax H3 field blocks or Seedance shot lists. Multi-line combinations resolve the same either way."}),
                 "remove_whitespaces": ("BOOLEAN", {"default": True, "tooltip": "Trim every line and collapse runs of spaces, and drop empty lines. Turn OFF to keep blank lines, e.g. between H3 field blocks."}),
-                "remove_empty_tags": ("BOOLEAN", {"default": True, "tooltip": "'tags' here is anything between dots or commas. Fixes cases like this: 'cat,,  , dog' -> 'cat, dog'."}),
+                "remove_empty_tags": ("BOOLEAN", {"default": False, "tooltip": "'tags' here is anything between dots or commas. Fixes cases like this: 'cat,,  , dog' -> 'cat, dog'. Off by default; ellipses (...) are kept either way."}),
                 "load_loras_from_prompt": ("BOOLEAN", {"default": True, "tooltip": "Compatibility placeholder for older workflows. LoRA loading is no longer handled by this node."}),
                 "remove_loras_pattern": ("BOOLEAN", {"default": True, "tooltip": "Compatibility placeholder for older workflows. When enabled, LoRA tags are stripped from the final prompt text."}),
                 "wildcard_directory": ("STRING", {"multiline": False, "default": WILDCARD_DIR, "dynamicPrompts": False, "tooltip": "The directory where TXT wildcard files are stored."}),
@@ -1631,10 +1679,16 @@ wildcard_directory: The directory where TXT wildcard files are stored.
 
         if remove_loras_pattern:
             cleaned_dp = remove_lora_patterns_from_prompt(dp)
-            if cleaned_dp != dp:
-                dp = cleaned_dp
-            if remove_whitespaces or remove_empty_tags:
-                dp = dynamic_prompts(prompt=dp, seed=seed, line_suffix=line_suffix, single_line_output=single_line_output, remove_whitespaces=remove_whitespaces, remove_empty_tags=remove_empty_tags, wildcard_dir=wildcard_directory)
+            if cleaned_dp != dp and (remove_whitespaces or remove_empty_tags):
+                # Re-run the cleanup only when a LoRA tag really was stripped. The
+                # resolved text no longer carries its comments, so the mode directive
+                # is put back first - otherwise a Seedance prompt would be re-parsed in
+                # normal mode and its literal dialogue braces eaten as combinations.
+                mode = detect_prompt_mode(prompt)
+                if mode != MODE_NORMAL:
+                    cleaned_dp = f"/# mode: {mode} #/\n{cleaned_dp}"
+                cleaned_dp = dynamic_prompts(prompt=cleaned_dp, seed=seed, line_suffix=line_suffix, single_line_output=single_line_output, remove_whitespaces=remove_whitespaces, remove_empty_tags=remove_empty_tags, wildcard_dir=wildcard_directory)
+            dp = cleaned_dp
         
         # Everything this prompt knows travels on: inherited variables plus the ones
         # assigned here. The in1..in6 socket names are dropped - the next node has its

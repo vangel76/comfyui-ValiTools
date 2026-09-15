@@ -138,7 +138,9 @@ app.registerExtension({
 		const MODE_H3_T2V = "h3_t2v";
 		const MODE_H3_R2V = "h3_r2v";
 		const MODE_SEEDANCE = "seedance";
-		const MODE_DIRECTIVE_REGEX = /(?:\/#|#)[ \t]*mode[ \t]*:[ \t]*([A-Za-z0-9 ._+-]{1,24}?)[ \t]*(?:#\/|#|$)/im;
+		// Anchored to the line start - the syntax reference quotes the directive
+		// inside a '#' comment and must not switch the mode. Mirrors nodes.py.
+		const MODE_DIRECTIVE_REGEX = /^[ \t]*(?:\/#|#)[ \t]*mode[ \t]*:[ \t]*([A-Za-z0-9 ._+-]{1,24}?)[ \t]*(?:#\/|#|$)/im;
 		const MODE_ALIASES = {
 			normal: MODE_NORMAL, off: MODE_NORMAL, none: MODE_NORMAL, plain: MODE_NORMAL,
 			h3: MODE_H3_T2V, "h3 t2v": MODE_H3_T2V, h3_t2v: MODE_H3_T2V, h3t2v: MODE_H3_T2V,
@@ -146,13 +148,14 @@ app.registerExtension({
 			"h3 r2v": MODE_H3_R2V, h3_r2v: MODE_H3_R2V, h3r2v: MODE_H3_R2V, r2v: MODE_H3_R2V,
 			seedance: MODE_SEEDANCE, "seedance 2.0": MODE_SEEDANCE, seedance2: MODE_SEEDANCE,
 			seedance_2_0: MODE_SEEDANCE, sd2: MODE_SEEDANCE,
+			"seedance 2.5": MODE_SEEDANCE, seedance25: MODE_SEEDANCE, seedance_2_5: MODE_SEEDANCE, sd25: MODE_SEEDANCE,
 		};
 		// Label -> directive text written into the prompt by the toolbar dropdown.
 		const MODE_CHOICES = [
 			{ id: MODE_NORMAL, label: "normal", directive: "normal" },
 			{ id: MODE_H3_T2V, label: "H3 t2v", directive: "h3 t2v" },
 			{ id: MODE_H3_R2V, label: "H3 r2v", directive: "h3 r2v" },
-			{ id: MODE_SEEDANCE, label: "Seedance 2.0", directive: "seedance" },
+			{ id: MODE_SEEDANCE, label: "Seedance", directive: "seedance" },
 		];
 
 		const detectPromptMode = (text) => {
@@ -188,6 +191,10 @@ app.registerExtension({
 		const SEEDANCE_BRACE_OPEN = "\ue020";
 		const SEEDANCE_BRACE_CLOSE = "\ue021";
 		const SEEDANCE_ASSIGN_AFTER_REGEX = /^\s*==\s*!?<[A-Za-z0-9_]+>/;
+		const SEEDANCE_ASSIGN_INSIDE_REGEX = /^==\s*!?<[A-Za-z0-9_]+>/;
+		// A group glued to a switcher guard ('<name>==value::{...}') never turns
+		// literal - the guard needs the real brace. Mirrors GUARD_BEFORE_PATTERN.
+		const SEEDANCE_GUARD_BEFORE_REGEX = /<[A-Za-z0-9_]+>\s*(?:==|!=)\s*[^:{}|<>\n]*?::$/;
 		const maskSeedanceLiteralBraces = (text) => {
 			if (text.indexOf("{") === -1) return text;
 			const chars = text.split("");
@@ -195,7 +202,8 @@ app.registerExtension({
 			for (let i = 0; i < text.length; i++) {
 				const char = text[i];
 				if (char === "{") {
-					stack.push([i, false]);
+					const guarded = SEEDANCE_GUARD_BEFORE_REGEX.test(text.slice(Math.max(0, i - 96), i));
+					stack.push([i, guarded]);
 				} else if (char === "}") {
 					if (!stack.length) continue;
 					const [openIndex, rolls] = stack.pop();
@@ -203,7 +211,15 @@ app.registerExtension({
 						chars[openIndex] = SEEDANCE_BRACE_OPEN;
 						chars[i] = SEEDANCE_BRACE_CLOSE;
 					}
-				} else if (stack.length && (char === "|" || (char === ":" && text.startsWith("::", i)))) {
+				} else if (
+					stack.length && (
+						char === "|"
+						|| (char === ":" && text.startsWith("::", i))
+						// An assignment inside the group ('{b==!<v>}') makes it a real
+						// block - left literal it would resolve away into a bare '{}'.
+						|| (char === "=" && text.startsWith("==", i) && SEEDANCE_ASSIGN_INSIDE_REGEX.test(text.slice(i, i + 40)))
+					)
+				) {
 					stack[stack.length - 1][1] = true; // innermost group only
 				}
 			}
@@ -862,16 +878,11 @@ app.registerExtension({
 			assign("line_suffix", 3, "");
 			assign("single_line_output", 4, true);
 			assign("remove_whitespaces", 5, true);
-			assign("remove_empty_tags", 6, true);
+			assign("remove_empty_tags", 6, false);
 			assign("load_loras_from_prompt", 7, true);
 			assign("remove_loras_pattern", 8, true);
 			assign("wildcard_directory", 9, "");
 			assign("prompt", 10, "");
-
-			for (const widgetName of ["single_line_output", "remove_whitespaces", "remove_empty_tags"]) {
-				const widget = getWidget(widgetName);
-				if (widget) widget.value = true;
-			}
 		};
 
 		const origOnConfigure = nodeType.prototype.onConfigure;
@@ -916,12 +927,11 @@ app.registerExtension({
 			toggleSpellCheckButton.serializeValue = () => undefined;
 
 			// --- 1. SETUP PROMPT WIDGET AND CUSTOM EDITOR ---
-				for (const hiddenWidgetName of ["available_loras_stem", "line_suffix", "single_line_output", "remove_whitespaces", "remove_empty_tags", "load_loras_from_prompt", "remove_loras_pattern"]) {
+				// The three output cleanup switches (single_line_output, remove_whitespaces,
+				// remove_empty_tags) stay visible: the backend honours them since v1.17.
+				for (const hiddenWidgetName of ["available_loras_stem", "line_suffix", "load_loras_from_prompt", "remove_loras_pattern"]) {
 					const hiddenWidget = this.widgets?.find((w) => w.name === hiddenWidgetName);
 					if (!hiddenWidget) continue;
-					if (hiddenWidgetName === "single_line_output" || hiddenWidgetName === "remove_whitespaces" || hiddenWidgetName === "remove_empty_tags") {
-						hiddenWidget.value = true;
-				}
 				hiddenWidget.computeSize = () => [0, 0];
 				hiddenWidget.y = -600;
 				hiddenWidget.hidden = true;
