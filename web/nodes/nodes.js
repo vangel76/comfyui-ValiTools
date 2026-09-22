@@ -1142,8 +1142,7 @@ app.registerExtension({
 				}
 				textHistory.lastTime = now;
 				textHistory.lastWasTyping = isTyping;
-				findBar?.syncButtons();
-				findBar?.refreshMode();  // the directive can also be typed by hand
+				findBar?.refresh();  // mode directive and '#vN#' marker can be typed by hand
 			};
 
 			const historyApply = (entry) => {
@@ -1159,8 +1158,7 @@ app.registerExtension({
 					textHistory.applying = false;
 				}
 				textHistory.lastWasTyping = false;
-				findBar?.syncButtons();
-				findBar?.refreshMode();
+				findBar?.refresh();
 			};
 
 			const canUndo = () => textHistory.index > 0;
@@ -1183,7 +1181,6 @@ app.registerExtension({
 				invalidateWildcardValidation();
 				updateEditorContent();
 				historyRecord(prompt_widget.value, cursor, false);
-				findBar?.refreshMode();
 			};
 
 			historyReset();
@@ -1264,19 +1261,33 @@ app.registerExtension({
 			// truncates widgets_values to the inherited layout length).
 			const SLOT_COUNT = 4;
 			const SLOT_PROPERTY = "valitools_slots";
+			const VERSIONS_PROPERTY = "valitools_versions";
 
-			const readSlots = () => {
+			// JSON stores in node.properties. Parsed once per distinct raw string - the
+			// toolbar refreshes on every keystroke and must not re-parse the version
+			// texts each time. A write replaces the raw string, so the cache self-invalidates.
+			const propertyCache = {};
+			const readProperty = (key, fallback) => {
+				const raw = this.properties?.[key];
+				const cached = propertyCache[key];
+				if (cached && cached.raw === raw) return cached.value;
+				let value = fallback;
 				try {
-					const parsed = JSON.parse(this.properties?.[SLOT_PROPERTY] || "[]");
-					return Array.isArray(parsed) ? parsed : [];
-				} catch {
-					return [];
-				}
+					if (raw) value = JSON.parse(raw);
+				} catch { /* corrupt property: fall back */ }
+				propertyCache[key] = { raw, value };
+				return value;
 			};
-			const writeSlots = (slots) => {
+			const writeProperty = (key, value) => {
 				this.properties = this.properties || {};
-				this.properties[SLOT_PROPERTY] = JSON.stringify(slots);
+				this.properties[key] = JSON.stringify(value);
 				this.setDirtyCanvas(true, true);
+			};
+			const savedStamp = () => new Date().toLocaleString();
+			// Loads stored prompt text into the editor as ONE undo step
+			const loadPromptText = (text) => {
+				applyTextChange(text, text.length);
+				editor.focus();
 			};
 			// First line that carries actual prompt text, for the button tooltip
 			const slotPreview = (text) => {
@@ -1287,7 +1298,64 @@ app.registerExtension({
 				return preview.length > 70 ? `${preview.substring(0, 69)}…` : preview;
 			};
 
+			const readSlots = () => {
+				const slots = readProperty(SLOT_PROPERTY, []);
+				return Array.isArray(slots) ? slots : [];
+			};
+
+			// --- PROMPT VERSIONS ----------------------------------------------
+			// Optional per-node history keyed by a '#v13#' marker in the text. One
+			// entry per number, written when the node has actually executed (a cached
+			// node did not change, so there is nothing new to keep). Off by default;
+			// the switch and the entries live in node.properties like the slots.
+			const VERSION_MARKER_REGEX = /(?:^|\s)#v(\d+)#(?=\s|$)/;
+
+			const readVersions = () => {
+				const store = readProperty(VERSIONS_PROPERTY, {});
+				return {
+					enabled: !!store?.enabled,
+					entries: Array.isArray(store?.entries) ? store.entries : [],
+				};
+			};
+			const versionOf = (text) => {
+				const match = VERSION_MARKER_REGEX.exec(text);
+				return match ? parseInt(match[1], 10) : null;
+			};
+			// Called after this node executed: store the current text under its marker
+			const recordVersion = () => {
+				const store = readVersions();
+				if (!store.enabled) return;
+				const text = prompt_widget.value || "";
+				const version = versionOf(text);
+				if (version === null) return; // no '#vN#' marker: nothing to keep
+				const existing = store.entries.find((entry) => entry.v === version);
+				if (existing) {
+					if (existing.text === text) return; // unchanged: keep its save time
+					Object.assign(existing, { text, saved: savedStamp(), preview: slotPreview(text) });
+				} else {
+					store.entries.push({ v: version, text, saved: savedStamp(), preview: slotPreview(text) });
+					store.entries.sort((a, b) => a.v - b.v);
+				}
+				writeProperty(VERSIONS_PROPERTY, store);
+				findBar?.refreshVersions();
+			};
+
 			findBar = new FindReplaceBar(editor, {
+				versions: {
+					info: () => {
+						const { enabled, entries } = readVersions();
+						return { enabled, current: versionOf(prompt_widget.value || ""), entries };
+					},
+					toggle: () => {
+						const store = readVersions();
+						store.enabled = !store.enabled;
+						writeProperty(VERSIONS_PROPERTY, store);
+					},
+					load: (version) => {
+						const entry = readVersions().entries.find((candidate) => candidate.v === version);
+						if (entry) loadPromptText(entry.text);
+					},
+				},
 				modes: MODE_CHOICES.map(({ id, label }) => ({ id, label })),
 				getMode: () => detectPromptMode(prompt_widget.value || ""),
 				setMode: (modeId) => {
@@ -1308,16 +1376,12 @@ app.registerExtension({
 						// Saving an empty editor clears the slot - that is the delete gesture
 						const text = getEditorPlainText(editor);
 						while (slots.length < SLOT_COUNT) slots.push(null);
-						slots[index] = String(text).trim()
-							? { text, saved: new Date().toLocaleString() }
-							: null;
-						writeSlots(slots);
+						slots[index] = String(text).trim() ? { text, saved: savedStamp() } : null;
+						writeProperty(SLOT_PROPERTY, slots);
 						return;
 					}
 					const slot = slots[index];
-					if (!slot || !String(slot.text || "").trim()) return; // empty slot: do nothing
-					applyTextChange(slot.text, slot.text.length); // one undo step
-					editor.focus();
+					if (slot && String(slot.text || "").trim()) loadPromptText(slot.text);
 				},
 				getText: () => getEditorPlainText(editor),
 				getCaret: () => getEditorSelectionState(editor)?.start ?? 0,
@@ -2007,6 +2071,7 @@ app.registerExtension({
 				const variableValues = detail.output?.variable_values?.[0];
 				this._silverVariableValues = (variableValues && typeof variableValues === "object") ? variableValues : null;
 				updateEditorContent();
+				recordVersion();
 			};
 			api.addEventListener("executed", executedListener);
 			this._silverExecutedListener = executedListener;

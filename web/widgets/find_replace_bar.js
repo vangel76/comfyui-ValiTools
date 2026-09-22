@@ -67,9 +67,36 @@ export class FindReplaceBar {
 		button.addEventListener("click", (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			onClick();
+			onClick(e);
 		});
 		return button;
+	}
+
+	/** A dropdown the editor's own handlers never see; onChange gets the chosen value. */
+	_select(title, minWidth, onChange) {
+		const select = document.createElement("select");
+		select.title = title;
+		select.style.cssText = `${BUTTON_CSS} padding: 2px 4px; min-width: ${minWidth}px;`;
+		select.addEventListener("mousedown", (e) => e.stopPropagation());
+		select.addEventListener("keydown", (e) => e.stopPropagation());
+		select.addEventListener("change", () => onChange(select.value));
+		return select;
+	}
+
+	_option(select, value, label, extra = {}) {
+		const option = document.createElement("option");
+		option.value = value;
+		option.textContent = label;
+		Object.assign(option, extra);
+		select.appendChild(option);
+		return option;
+	}
+
+	/** The one "highlighted" look shared by slot buttons and the version switch. */
+	_setActive(button, active) {
+		button.style.background = active ? "#1f3f5a" : "#333";
+		button.style.color = active ? "#8ec1ff" : "#777";
+		button.style.fontWeight = active ? "bold" : "normal";
 	}
 
 	_input(placeholder, width) {
@@ -116,22 +143,28 @@ export class FindReplaceBar {
 		// directive inside the prompt text, the bar only shows and sets it.
 		this.modeSelect = null;
 		if (Array.isArray(this.api.modes) && this.api.modes.length) {
-			const select = document.createElement("select");
-			select.title = "Output syntax mode - written into the prompt as '/# mode: ... #/'";
-			select.style.cssText = `${BUTTON_CSS} padding: 2px 4px; min-width: 88px;`;
-			for (const mode of this.api.modes) {
-				const option = document.createElement("option");
-				option.value = mode.id;
-				option.textContent = mode.label;
-				select.appendChild(option);
-			}
-			select.addEventListener("mousedown", (e) => e.stopPropagation());
-			select.addEventListener("keydown", (e) => e.stopPropagation());
-			select.addEventListener("change", () => {
-				this.api.setMode?.(select.value);
+			this.modeSelect = this._select("Output syntax mode - written into the prompt as '/# mode: ... #/'", 88, (value) => {
+				this.api.setMode?.(value);
 				this.refreshMode();
 			});
-			this.modeSelect = select;
+			for (const mode of this.api.modes) this._option(this.modeSelect, mode.id, mode.label);
+		}
+
+		// Prompt versions: a switch and a dropdown of the '#vN#' entries the node
+		// recorded. Storage and rules live in the node; the bar only shows and picks.
+		this.versionToggle = null;
+		this.versionSelect = null;
+		if (this.api.versions) {
+			this.versionToggle = this._button("V", "", () => {
+				this.api.versions.toggle();
+				this.refreshVersions();
+			});
+			this.versionSelect = this._select("", 64, (value) => {
+				const version = parseInt(value, 10);
+				if (!Number.isNaN(version)) this.api.versions.load(version);
+				this.refreshVersions();
+			});
+			this._versionsSignature = null;
 		}
 
 		this.undoButton = this._button("↶", "Undo (CTRL+Z)", () => this.api.undo());
@@ -206,29 +239,23 @@ export class FindReplaceBar {
 		// Prompt slots: click loads, SHIFT+click saves. The bar stays dumb - the node
 		// owns the storage and answers through the api callbacks.
 		this.slotButtons = [];
-		if (this.api.slotCount) {
-			if (this.modeSelect) this.element.append(this.modeSelect, separator());
-			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, separator());
-			for (let index = 0; index < this.api.slotCount; index++) {
-				const button = document.createElement("button");
-				button.textContent = String(index + 1);
-				button.style.cssText = BUTTON_CSS;
-				button.addEventListener("mousedown", (e) => e.preventDefault());
-				button.addEventListener("click", (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					this.api.onSlotClick?.(index, e.shiftKey);
-					this.refreshSlots();
-				});
-				this.slotButtons.push(button);
-				this.element.appendChild(button);
-			}
-			this.element.appendChild(this.panel);
-			this.refreshSlots();
-		} else {
-			if (this.modeSelect) this.element.append(this.modeSelect, separator());
-			this.element.append(this.undoButton, this.redoButton, this.copyButton, this.findButton, this.panel);
+		for (let index = 0; index < (this.api.slotCount || 0); index++) {
+			this.slotButtons.push(this._button(String(index + 1), "", (e) => {
+				this.api.onSlotClick?.(index, e.shiftKey);
+				this.refreshSlots();
+			}));
 		}
+
+		// Every part is optional; the order is the bar's layout.
+		const parts = [
+			this.modeSelect, this.modeSelect && separator(),
+			this.undoButton, this.redoButton, this.copyButton, this.findButton,
+			this.slotButtons.length && separator(), ...this.slotButtons,
+			this.versionToggle && separator(), this.versionToggle, this.versionSelect,
+			this.panel,
+		].filter(Boolean);
+		this.element.append(...parts);
+		this.refresh();
 		document.body.appendChild(this.element);
 	}
 
@@ -242,9 +269,7 @@ export class FindReplaceBar {
 		this.element.style.display = "flex";
 		this._reposition();
 		this._startTracking();
-		this.syncButtons();
-		this.refreshMode();
-		this.refreshSlots();  // a loaded or copied node brings its own slots
+		this.refresh();  // a loaded or copied node brings its own slots / versions
 	}
 
 	cancelHide() {
@@ -310,13 +335,48 @@ export class FindReplaceBar {
 		this.modeSelect.style.borderColor = isDefault ? "#555" : "#8a6d1f";
 	}
 
+	/** Everything the bar shows that depends on the node's text or stores. */
+	refresh() {
+		this.syncButtons();
+		this.refreshMode();
+		this.refreshSlots();
+		this.refreshVersions();
+	}
+
+	/** Rebuilds the version dropdown from the node's store and the marker in the text. */
+	refreshVersions() {
+		if (!this.versionToggle) return;
+		const { enabled, current, entries } = this.api.versions.info();
+
+		// Runs on every keystroke - only touch the DOM when something it shows changed
+		const signature = `${enabled}|${current}|${entries.map((entry) => `${entry.v}@${entry.saved}`).join(",")}`;
+		if (signature === this._versionsSignature) return;
+		this._versionsSignature = signature;
+
+		this._setActive(this.versionToggle, enabled);
+		this.versionToggle.title = enabled
+			? "Version history ON - every run stores the prompt under its '#vN#' marker (one entry per number, same number overwrites)\nclick = switch off"
+			: "Version history OFF\nclick = switch on; needs a '#vN#' line in the prompt, e.g. #v13#";
+
+		const select = this.versionSelect;
+		select.hidden = !enabled && entries.length === 0;
+		select.innerHTML = "";
+		this._option(select, "", current === null ? "v?" : `v${current}`, { disabled: true, selected: true });
+		for (const entry of entries) {
+			this._option(select, String(entry.v), `v${entry.v}${entry.v === current ? " •" : ""} · ${entry.saved}`, { title: entry.preview });
+		}
+		select.title = entries.length
+			? `${entries.length} stored version(s) - pick one to load it (one undo step)`
+			: "Nothing stored yet - a run of the node stores the prompt under its '#vN#' marker";
+		const stored = current !== null && entries.some((entry) => entry.v === current);
+		select.style.color = stored ? "#8ec1ff" : "#ffd166";
+	}
+
 	refreshSlots() {
 		if (!this.slotButtons?.length) return;
 		this.slotButtons.forEach((button, index) => {
 			const info = this.api.getSlotInfo?.(index) || {};
-			button.style.background = info.filled ? "#1f3f5a" : "#333";
-			button.style.color = info.filled ? "#8ec1ff" : "#777";
-			button.style.fontWeight = info.filled ? "bold" : "normal";
+			this._setActive(button, info.filled);
 			button.title = info.filled
 				? `Slot ${index + 1}: ${info.preview}\nsaved ${info.saved}\n\nclick = load, SHIFT+click = overwrite`
 				: `Slot ${index + 1} is empty\n\nSHIFT+click = save the current prompt here`;
