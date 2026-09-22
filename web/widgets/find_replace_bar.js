@@ -142,12 +142,12 @@ export class FindReplaceBar {
 		// Output mode: normal / H3 / Seedance. The node stores it as a comment
 		// directive inside the prompt text, the bar only shows and sets it.
 		this.modeSelect = null;
-		if (Array.isArray(this.api.modes) && this.api.modes.length) {
+		if (this.api.modes?.list?.length) {
 			this.modeSelect = this._select("Output syntax mode - written into the prompt as '/# mode: ... #/'", 88, (value) => {
-				this.api.setMode?.(value);
+				this.api.modes.set(value);
 				this.refreshMode();
 			});
-			for (const mode of this.api.modes) this._option(this.modeSelect, mode.id, mode.label);
+			for (const mode of this.api.modes.list) this._option(this.modeSelect, mode.id, mode.label);
 		}
 
 		// Prompt versions: a switch and a dropdown of the '#vN#' entries the node
@@ -239,9 +239,9 @@ export class FindReplaceBar {
 		// Prompt slots: click loads, SHIFT+click saves. The bar stays dumb - the node
 		// owns the storage and answers through the api callbacks.
 		this.slotButtons = [];
-		for (let index = 0; index < (this.api.slotCount || 0); index++) {
+		for (let index = 0; index < (this.api.slots?.count || 0); index++) {
 			this.slotButtons.push(this._button(String(index + 1), "", (e) => {
-				this.api.onSlotClick?.(index, e.shiftKey);
+				this.api.slots.click(index, e.shiftKey);
 				this.refreshSlots();
 			}));
 		}
@@ -324,13 +324,13 @@ export class FindReplaceBar {
 		this.element.style.top = `${Math.max(4, rect.top + 4)}px`;
 	}
 
-	/** Re-reads every slot and updates its button (filled slots stand out). */
 	/** Pulls the mode back out of the prompt text (it can also be typed by hand). */
 	refreshMode() {
 		if (!this.modeSelect) return;
-		const current = this.api.getMode?.() || this.api.modes[0].id;
+		const defaultId = this.api.modes.list[0].id;
+		const current = this.api.modes.get() || defaultId;
 		if (this.modeSelect.value !== current) this.modeSelect.value = current;
-		const isDefault = current === this.api.modes[0].id;
+		const isDefault = current === defaultId;
 		this.modeSelect.style.color = isDefault ? "#ddd" : "#ffd166";
 		this.modeSelect.style.borderColor = isDefault ? "#555" : "#8a6d1f";
 	}
@@ -375,7 +375,7 @@ export class FindReplaceBar {
 	refreshSlots() {
 		if (!this.slotButtons?.length) return;
 		this.slotButtons.forEach((button, index) => {
-			const info = this.api.getSlotInfo?.(index) || {};
+			const info = this.api.slots.info(index) || {};
 			this._setActive(button, info.filled);
 			button.title = info.filled
 				? `Slot ${index + 1}: ${info.preview}\nsaved ${info.saved}\n\nclick = load, SHIFT+click = overwrite`

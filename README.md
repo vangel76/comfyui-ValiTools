@@ -89,7 +89,7 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
 # Changelog
-- v1.20.0
+- v1.20.1
   - VSmartPrompt: **prompt versions** - a `#vN#` marker line plus the `V` switch in the editor toolbar keep a per-node history: each execution stores the prompt under its number (one entry per number, same number overwrites), the dropdown loads any stored version as one undo step. Off by default, stored in the node's properties
 - v1.19.0
   - VSmartPrompt: **Seedance mode switchers fixed** - a `{...}` block glued to a switcher guard (`<top>==cabrio::{no window}`, `<pose>==x::{{a|b}}`) was treated as literal text, so the guard never fired and the prefix leaked into the output as `cabrio==cabrio::`. Guarded blocks are now always live; every other brace pair stays literal as before. Editor highlighting mirrors the rule

@@ -1356,32 +1356,36 @@ app.registerExtension({
 						if (entry) loadPromptText(entry.text);
 					},
 				},
-				modes: MODE_CHOICES.map(({ id, label }) => ({ id, label })),
-				getMode: () => detectPromptMode(prompt_widget.value || ""),
-				setMode: (modeId) => {
-					const current = prompt_widget.value || "";
-					const updated = writePromptMode(current, modeId);
-					if (updated === current) return;
-					applyTextChange(updated, updated.length); // one undo step
+				modes: {
+					list: MODE_CHOICES.map(({ id, label }) => ({ id, label })),
+					get: () => detectPromptMode(prompt_widget.value || ""),
+					set: (modeId) => {
+						const current = prompt_widget.value || "";
+						const updated = writePromptMode(current, modeId);
+						if (updated === current) return;
+						applyTextChange(updated, updated.length); // one undo step
+					},
 				},
-				slotCount: SLOT_COUNT,
-				getSlotInfo: (index) => {
-					const slot = readSlots()[index];
-					if (!slot || !String(slot.text || "").trim()) return { filled: false };
-					return { filled: true, preview: slotPreview(slot.text), saved: slot.saved || "earlier" };
-				},
-				onSlotClick: (index, shiftKey) => {
-					const slots = readSlots();
-					if (shiftKey) {
-						// Saving an empty editor clears the slot - that is the delete gesture
-						const text = getEditorPlainText(editor);
-						while (slots.length < SLOT_COUNT) slots.push(null);
-						slots[index] = String(text).trim() ? { text, saved: savedStamp() } : null;
-						writeProperty(SLOT_PROPERTY, slots);
-						return;
-					}
-					const slot = slots[index];
-					if (slot && String(slot.text || "").trim()) loadPromptText(slot.text);
+				slots: {
+					count: SLOT_COUNT,
+					info: (index) => {
+						const slot = readSlots()[index];
+						if (!slot || !String(slot.text || "").trim()) return { filled: false };
+						return { filled: true, preview: slotPreview(slot.text), saved: slot.saved || "earlier" };
+					},
+					click: (index, shiftKey) => {
+						const slots = readSlots();
+						if (shiftKey) {
+							// Saving an empty editor clears the slot - that is the delete gesture
+							const text = getEditorPlainText(editor);
+							while (slots.length < SLOT_COUNT) slots.push(null);
+							slots[index] = String(text).trim() ? { text, saved: savedStamp() } : null;
+							writeProperty(SLOT_PROPERTY, slots);
+							return;
+						}
+						const slot = slots[index];
+						if (slot && String(slot.text || "").trim()) loadPromptText(slot.text);
+					},
 				},
 				getText: () => getEditorPlainText(editor),
 				getCaret: () => getEditorSelectionState(editor)?.start ?? 0,
