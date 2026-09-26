@@ -154,9 +154,16 @@ export class FindReplaceBar {
 		// recorded. Storage and rules live in the node; the bar only shows and picks.
 		this.versionToggle = null;
 		this.versionSelect = null;
+		this.versionDeleteButton = null;
 		if (this.api.versions) {
 			this.versionToggle = this._button("V", "", () => {
 				this.api.versions.toggle();
+				this.refreshVersions();
+			});
+			this.versionDeleteButton = this._button("🗑", "", () => {
+				const { current } = this.api.versions.info();
+				if (current === null) return;
+				this.api.versions.remove(current);
 				this.refreshVersions();
 			});
 			this.versionSelect = this._select("", 64, (value) => {
@@ -251,7 +258,7 @@ export class FindReplaceBar {
 			this.modeSelect, this.modeSelect && separator(),
 			this.undoButton, this.redoButton, this.copyButton, this.findButton,
 			this.slotButtons.length && separator(), ...this.slotButtons,
-			this.versionToggle && separator(), this.versionToggle, this.versionSelect,
+			this.versionToggle && separator(), this.versionToggle, this.versionSelect, this.versionDeleteButton,
 			this.panel,
 		].filter(Boolean);
 		this.element.append(...parts);
@@ -341,6 +348,7 @@ export class FindReplaceBar {
 		this.refreshMode();
 		this.refreshSlots();
 		this.refreshVersions();
+		this.refreshMatches();
 	}
 
 	/** Rebuilds the version dropdown from the node's store and the marker in the text. */
@@ -354,9 +362,9 @@ export class FindReplaceBar {
 		this._versionsSignature = signature;
 
 		this._setActive(this.versionToggle, enabled);
-		this.versionToggle.title = enabled
-			? "Version history ON - every run stores the prompt under its '#vN#' marker (one entry per number, same number overwrites)\nclick = switch off"
-			: "Version history OFF\nclick = switch on; needs a '#vN#' line in the prompt, e.g. #v13#";
+		this.versionToggle.title = current === null
+			? "Version history: always on - needs a '#vN#' line in the prompt, e.g. #v13#; every run stores the prompt under that number\nclick = store the current text now"
+			: `Version history: always on - every run stores the prompt under its '#vN#' marker (one entry per number, same number overwrites)\nclick = store v${current} now`;
 
 		const select = this.versionSelect;
 		select.hidden = !enabled && entries.length === 0;
@@ -370,6 +378,13 @@ export class FindReplaceBar {
 			: "Nothing stored yet - a run of the node stores the prompt under its '#vN#' marker";
 		const stored = current !== null && entries.some((entry) => entry.v === current);
 		select.style.color = stored ? "#8ec1ff" : "#ffd166";
+
+		this.versionDeleteButton.hidden = !enabled && entries.length === 0;
+		this.versionDeleteButton.disabled = !stored;
+		this.versionDeleteButton.style.opacity = stored ? "1" : "0.35";
+		this.versionDeleteButton.title = stored
+			? `Delete the stored v${current} (cannot be undone)`
+			: "Nothing stored under the current '#vN#' marker";
 	}
 
 	refreshSlots() {
@@ -438,8 +453,11 @@ export class FindReplaceBar {
 		this.hide();
 	}
 
-	/** Recomputes matches against the current text (call after external edits). */
-	refresh() {
+	/** Recomputes matches against the current text (call after external edits).
+	 *  Was also named refresh() until 1.20.5 - the later definition silently
+	 *  replaced the toolbar refresh above, so mode / slots / versions were never
+	 *  rebuilt on load, tab switch or hover; only a run repopulated the dropdown. */
+	refreshMatches() {
 		if (!this.open) return;
 		this._search({ keepActive: true, silent: true });
 	}

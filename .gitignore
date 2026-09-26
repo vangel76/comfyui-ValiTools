@@ -20,3 +20,5 @@ wildcards/haircolor2.txt
 wildcards/haircolor3.txt
 deploy.sh
 Guides/
+dev/harness/node_modules/
+dev/harness/hz/web/

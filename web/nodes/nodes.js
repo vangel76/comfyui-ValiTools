@@ -912,7 +912,7 @@ app.registerExtension({
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function() {
             origOnNodeCreated?.apply(this, arguments);
-            console.log("[VSmartPrompt] JS initialized for:", this.title);
+            console.log("[VSmartPrompt] JS 1.20.6 initialized for:", this.title);
 			let editor = null;
 			this._silverSelectedCombinationRanges = [];
 			this._silverResolvedWildcardExecutions = [];
@@ -1282,6 +1282,16 @@ app.registerExtension({
 				this.properties = this.properties || {};
 				this.properties[key] = JSON.stringify(value);
 				this.setDirtyCanvas(true, true);
+				// setDirtyCanvas only repaints. The frontend's change tracker snapshots
+				// the graph on user input events, not on a write made from the
+				// 'executed' listener - so the workflow was never flagged modified, the
+				// tab snapshot stayed stale, and switching workflows dropped the stored
+				// versions (1.20.3). Ask the tracker to take its snapshot now.
+				try {
+					const tracker = app.extensionManager?.workflow?.activeWorkflow?.changeTracker;
+					if (tracker) (tracker.captureCanvasState ?? tracker.checkState)?.call(tracker);
+					else app.graph?.setDirtyCanvas?.(true, true);
+				} catch { /* older frontend without a tracker: nothing to poke */ }
 			};
 			const savedStamp = () => new Date().toLocaleString();
 			// Loads stored prompt text into the editor as ONE undo step
@@ -1306,14 +1316,17 @@ app.registerExtension({
 			// --- PROMPT VERSIONS ----------------------------------------------
 			// Optional per-node history keyed by a '#v13#' marker in the text. One
 			// entry per number, written when the node has actually executed (a cached
-			// node did not change, so there is nothing new to keep). Off by default;
+			// node did not change, so there is nothing new to keep) or when V is clicked. Always on;
 			// the switch and the entries live in node.properties like the slots.
 			const VERSION_MARKER_REGEX = /(?:^|\s)#v(\d+)#(?=\s|$)/;
 
 			const readVersions = () => {
 				const store = readProperty(VERSIONS_PROPERTY, {});
 				return {
-					enabled: !!store?.enabled,
+					// Always on (1.20.4). The per-node switch cost two days of versions:
+					// new nodes started off, old nodes kept a stored 'false'. A stored
+					// flag is ignored; the V button now stores the current text on demand.
+					enabled: true,
 					entries: Array.isArray(store?.entries) ? store.entries : [],
 				};
 			};
@@ -1330,7 +1343,8 @@ app.registerExtension({
 				if (version === null) return; // no '#vN#' marker: nothing to keep
 				const existing = store.entries.find((entry) => entry.v === version);
 				if (existing) {
-					if (existing.text === text) return; // unchanged: keep its save time
+					// Same number = overwrite, and the stamp is the time of THIS save even
+					// when the text did not change (1.20.6 - it used to keep the old time)
 					Object.assign(existing, { text, saved: savedStamp(), preview: slotPreview(text) });
 				} else {
 					store.entries.push({ v: version, text, saved: savedStamp(), preview: slotPreview(text) });
@@ -1347,13 +1361,21 @@ app.registerExtension({
 						return { enabled, current: versionOf(prompt_widget.value || ""), entries };
 					},
 					toggle: () => {
-						const store = readVersions();
-						store.enabled = !store.enabled;
-						writeProperty(VERSIONS_PROPERTY, store);
+						// V = store the current text under its '#vN#' marker right now,
+						// without waiting for a run (history itself is always on)
+						recordVersion();
 					},
 					load: (version) => {
 						const entry = readVersions().entries.find((candidate) => candidate.v === version);
 						if (entry) loadPromptText(entry.text);
+					},
+					remove: (version) => {
+						const store = readVersions();
+						const before = store.entries.length;
+						store.entries = store.entries.filter((entry) => entry.v !== version);
+						if (store.entries.length === before) return; // nothing stored under that number
+						writeProperty(VERSIONS_PROPERTY, store);
+						findBar?.refreshVersions();
 					},
 				},
 				modes: {

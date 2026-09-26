@@ -2,3 +2,4 @@
 # Note: imgs/ stays IN - the README on the registry page references those images.
 *.zip
 tests/
+dev/
