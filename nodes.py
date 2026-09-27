@@ -594,6 +594,8 @@ def dynamic_prompts(
             for name, value in preset_variables.items()
             if value is not None
         })
+    # Socket / inherited values are inserted as-is: nested '<name>' in them is never expanded.
+    preset_values: dict[str, str] = dict(variables)
 
     # Assignments of blocks that sit INSIDE another, not yet resolved block are parked
     # here instead of being applied: their branch may never be selected. The text keeps
@@ -628,8 +630,14 @@ def dynamic_prompts(
         text: str,
         text_source_map: list[int | None] | None = None,
         text_wildcard_map: list[int | None] | None = None,
+        _expanding: tuple[str, ...] = (),
     ) -> str | tuple[str, list[int | None] | None, list[int | None] | None]:
-        """Replaces '<name>' references with their stored values (substituted text maps to no source)."""
+        """Replaces '<name>' references with their stored values (substituted text maps to no source).
+
+        A stored value may itself hold '<other>' references ('{on <ground>}==!<pose>');
+        they are expanded when the value is printed, so the assignment order does not
+        matter. Socket / inherited values stay as-is, and a name already being expanded
+        stays literal, so '{a <x>}==<x>' cannot loop."""
         if not variables or "<" not in text:
             if text_source_map is None:
                 return text
@@ -651,9 +659,13 @@ def dynamic_prompts(
             if mode in (MODE_H3_T2V, MODE_H3_R2V) and name in H3_RESERVED_TAGS:
                 continue  # H3 speech/structure tag, not a variable reference
 
+            if name in _expanding:
+                continue  # self / cyclic reference stays literal
             value = variables.get(name)
             if value is None:
                 continue  # unknown name stays literal
+            if "<" in value and not (name in preset_values and value == preset_values[name]):
+                value = _substitute_variables(value, _expanding=_expanding + (name,))
 
             start, end = match.span()
             result_parts.append(text[last_index:start])
