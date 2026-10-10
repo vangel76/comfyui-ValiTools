@@ -12,13 +12,15 @@ class _PS:
 srv.PromptServer = _PS
 sys.modules["server"] = srv
 here = os.path.dirname(os.path.abspath(__file__))
-spec = importlib.util.spec_from_file_location("nodes", os.path.join(here, "..", "..", "nodes.py"))
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+root = os.path.normpath(os.path.join(here, "..", ".."))
+pkg = types.ModuleType("valitools"); pkg.__path__ = [root]; sys.modules["valitools"] = pkg  # for 'from .vpaths import'
+spec = importlib.util.spec_from_file_location("valitools.nodes", os.path.join(root, "nodes.py"))
+m = importlib.util.module_from_spec(spec); sys.modules["valitools.nodes"] = m; spec.loader.exec_module(m)
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 text = open(args[0], encoding="utf-8").read()
 seed = int(args[1]) if len(args) > 1 else 1
 if "--main" in sys.argv:
     cls = next(v for k, v in vars(m).items() if isinstance(v, type) and getattr(v, "FUNCTION", "") == "main" and "VSmartPrompt" in k)
-    print(cls().main("", seed, "", False, True, False, True, True, "/nonexistent", prompt=text)["result"][0])
+    print(cls().main("", seed, "", False, True, False, True, True, m.WILDCARD_DIR, prompt=text)["result"][0])
 else:
     print(m.dynamic_prompts(text, seed, single_line_output=False, remove_whitespaces=True, remove_empty_tags=False))

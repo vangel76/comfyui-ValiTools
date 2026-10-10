@@ -912,7 +912,7 @@ app.registerExtension({
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function() {
             origOnNodeCreated?.apply(this, arguments);
-            console.log("[VSmartPrompt] JS 1.20.6 initialized for:", this.title);
+            console.log("[VSmartPrompt] JS 1.21.0 initialized for:", this.title);
 			let editor = null;
 			this._silverSelectedCombinationRanges = [];
 			this._silverResolvedWildcardExecutions = [];
@@ -1752,11 +1752,10 @@ app.registerExtension({
 						e.stopPropagation();
 						
 						const wildcardFileName = hovered_wildcard_content.toLowerCase().endsWith(".txt") ? hovered_wildcard_content : `${hovered_wildcard_content}.txt`;
-						const baseDir = (current_wildcard_directory || "").replace(/[\\/]+$/, "");
-						const wildcard_file_path = baseDir ? `${baseDir}/${wildcardFileName}` : wildcardFileName;
 						// Edit the .txt in ComfyUI itself - handing the path to the OS file
-						// handler would be a system call (and never works on remote installs)
-						wildcardEditor.open(wildcard_file_path, current_wildcard_directory, hovered_wildcard_content, async () => {
+						// handler would be a system call (and never works on remote installs).
+						// The name stays relative: the server joins it to the confined directory.
+						wildcardEditor.open(wildcardFileName, current_wildcard_directory, hovered_wildcard_content, async () => {
 							await get_wildcard_files();
 							invalidateWildcardValidation();
 							updateEditorContent();

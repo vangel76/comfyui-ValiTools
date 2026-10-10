@@ -23,7 +23,7 @@ const BUTTON_CSS = `
 
 export class WildcardEditor {
 	constructor() {
-		this.filePath = null;
+		this.fileName = null;
 		this.wildcardDir = null;
 		this.onSaved = null;
 		this._build();
@@ -86,13 +86,13 @@ export class WildcardEditor {
 
 	/**
 	 * Loads a wildcard file and shows the editor.
-	 * @param {string} filePath absolute path of the .txt
+	 * @param {string} fileName the .txt relative to the wildcard directory (subfolders ok)
 	 * @param {string} wildcardDir the node's wildcard directory (server-side guard)
 	 * @param {string} label short name shown in the title
 	 * @param {() => void} onSaved called after a successful save
 	 */
-	async open(filePath, wildcardDir, label, onSaved) {
-		this.filePath = filePath;
+	async open(fileName, wildcardDir, label, onSaved) {
+		this.fileName = fileName;
 		this.wildcardDir = wildcardDir;
 		this.onSaved = onSaved;
 		this.title.textContent = `__${label}__`;
@@ -104,7 +104,7 @@ export class WildcardEditor {
 			const response = await fetch("/valitools/read_wildcard", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ file_path: filePath, wildcard_dir: wildcardDir }),
+				body: JSON.stringify({ file_name: fileName, wildcard_dir: wildcardDir }),
 			});
 			const data = await response.json();
 			if (!data.success) {
@@ -121,14 +121,14 @@ export class WildcardEditor {
 	}
 
 	async save() {
-		if (!this.filePath) return;
+		if (!this.fileName) return;
 		this.status.textContent = "Saving…";
 		try {
 			const response = await fetch("/valitools/save_wildcard", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					file_path: this.filePath,
+					file_name: this.fileName,
 					wildcard_dir: this.wildcardDir,
 					content: this.area.value,
 				}),
@@ -147,7 +147,7 @@ export class WildcardEditor {
 
 	close() {
 		this.element.style.display = "none";
-		this.filePath = null;
+		this.fileName = null;
 		this.onSaved = null;
 	}
 

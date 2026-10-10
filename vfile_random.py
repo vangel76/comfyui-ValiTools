@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 
+from .vpaths import contained, image_base, image_roots, safe_join
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 
 # Shuffle-bag state lives next to the package so a ComfyUI restart does not
@@ -35,6 +37,25 @@ def _save_state(state):
         print(f"[VFileRandom] Could not persist state file: {e}")
 
 
+def _confine_folder(folder):
+    """realpath of the widget's folder. A relative path starts in ComfyUI's input
+    folder; an absolute one must lie inside input/output/temp or a folder listed
+    under 'image_dirs' in allowed_folders.json (see vpaths)."""
+    expanded = os.path.expanduser(folder)
+    if os.path.isabs(expanded):
+        real = contained(expanded, image_roots())
+    else:
+        base = image_base()
+        real = safe_join(base, expanded) if base else None
+    if real is None:
+        raise ValueError(
+            f"VFileRandom: '{folder}' is outside the allowed folders. Use a folder inside ComfyUI's "
+            f"input/output folder (relative paths start in input/), or add it to 'image_dirs' in "
+            f"{os.path.join(os.path.dirname(os.path.abspath(__file__)), 'allowed_folders.json')}"
+        )
+    return real
+
+
 def _scan_images(folder, include_subfolders):
     files = []
     if include_subfolders:
@@ -50,15 +71,16 @@ def _scan_images(folder, include_subfolders):
     return files
 
 
-def _draw_from_bag(folder, include_subfolders, seed, reset_cycle):
-    """Pick the next image of the no-repeat cycle.
+def _draw_from_bag(folder, include_subfolders, seed, reset_cycle, state_name):
+    """Pick the next image of the no-repeat cycle. 'state_name' keys the cycle in
+    the state file (the folder as typed, so existing cycles survive).
 
     Returns (relative_name, remaining_after, cycle_total)."""
     files = _scan_images(folder, include_subfolders)
     if not files:
         raise ValueError(f"VFileRandom: no image files found in '{folder}'")
 
-    key = f"{folder}|subfolders={bool(include_subfolders)}"
+    key = f"{state_name}|subfolders={bool(include_subfolders)}"
     rng = random.Random(seed)
 
     with _state_lock:
@@ -113,7 +135,7 @@ class VFileRandom:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "folder": ("STRING", {"multiline": False, "default": "", "tooltip": "Absolute path to the folder to draw images from."}),
+                "folder": ("STRING", {"multiline": False, "default": "", "tooltip": "Folder to draw images from. Relative paths start in ComfyUI's input folder; absolute paths must lie inside input/output or a folder listed in allowed_folders.json."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Only triggers a new draw (keep it on 'randomize'); the no-repeat cycle itself is stateful."}),
                 "include_subfolders": ("BOOLEAN", {"default": False}),
                 "reset_cycle": ("BOOLEAN", {"default": False, "tooltip": "Forget which images were already drawn and start a fresh shuffled cycle on this run."}),
@@ -138,12 +160,19 @@ the deck reshuffles.
 """
 
     def main(self, folder, seed, include_subfolders, reset_cycle):
-        folder = os.path.normpath(os.path.expanduser(folder.strip()))
-        if not folder or not os.path.isdir(folder):
+        folder = folder.strip()
+        if not folder:
+            raise ValueError("VFileRandom: no folder given")
+        state_name = os.path.normpath(os.path.expanduser(folder))
+        folder = _confine_folder(folder)
+        if not os.path.isdir(folder):
             raise ValueError(f"VFileRandom: '{folder}' is not a directory")
 
-        name, remaining, cycle_total = _draw_from_bag(folder, include_subfolders, seed, reset_cycle)
-        path = os.path.join(folder, name)
+        name, remaining, cycle_total = _draw_from_bag(folder, include_subfolders, seed, reset_cycle, state_name)
+        # a symlinked image must not lead out of the folder
+        path = contained(os.path.join(folder, name), [folder])
+        if path is None:
+            raise ValueError(f"VFileRandom: '{name}' points outside '{folder}'")
         try:
             image, mask = _load_image_tensor(path)
         except Exception as e:

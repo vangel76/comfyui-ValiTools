@@ -62,6 +62,7 @@ Loads a random image from a folder — like a shuffled deck: no image repeats un
 - The cycle is remembered per folder in `vfile_random_state.json` (survives ComfyUI restarts)
 - Images added mid-cycle join the current cycle; deleted ones are dropped
 - `include_subfolders` scans recursively; `reset_cycle` starts a fresh shuffled cycle
+- `folder` must lie inside ComfyUI's `input`/`output`/`temp` folder (relative paths start in `input/`) or a folder allowed in `allowed_folders.json` - see *Allowed folders*
 - Keep `seed` on *randomize* — it only triggers a new draw each queue; fix it to pause drawing
 - Outputs: `image`, `mask` (from alpha), `filename` (relative to folder), `remaining_in_cycle`, `filename_noext`
 - After each run the node displays the cycle progress (e.g. `45 / 235`) so you can see when the deck reshuffles
@@ -88,7 +89,28 @@ Holds execution until the GPU has a minimum amount of free VRAM.
 - Without a CUDA device it passes through immediately
 - Outputs: `any_out` (the passed-through value), `free_gb`
 
+## Allowed folders
+
+Workflows and browser requests are untrusted, so ValiTools only reads or writes files inside fixed folders:
+
+- **Wildcards** (`wildcard_directory`, the `__`-dropdown, the CTRL+Click editor): the package's own `wildcards/` folder. A relative `wildcard_directory` is taken inside it; an absolute one outside the allowed folders falls back to it (also what happens with a workflow from another machine)
+- **VFileRandom** `folder`: ComfyUI's `input`, `output` and `temp` folders. A relative path starts in `input/`
+
+More folders can be allowed by the server admin in `allowed_folders.json` next to the package's `__init__.py` (read on every use, no restart needed; it cannot be changed from the browser):
+
+```json
+{
+  "wildcard_dirs": ["/srv/my_wildcards"],
+  "image_dirs": ["/home/me/Pictures/AI"]
+}
+```
+
+Subfolders of an allowed folder are allowed too; symlinks that lead out of it are not followed.
+
 # Changelog
+- v1.21.0
+  - **Path containment** for every file ValiTools touches (requested in the ComfyUI-Manager review). Paths are resolved with `realpath` and accepted only inside a fixed folder - see *Allowed folders*. The wildcard routes no longer trust the directory sent by the browser beyond that, the CTRL+Click editor sends the file name relative to the wildcard folder (absolute paths and `..` are rejected), and symlinked wildcard files or folders that lead outside are ignored
+  - VFileRandom: `folder` must lie inside ComfyUI's `input`/`output`/`temp` or a folder listed under `image_dirs` in `allowed_folders.json`; relative paths start in `input/`. **Existing workflows with folders elsewhere stop with an error until that folder is added there.** The no-repeat cycles of existing folders are kept
 - v1.20.7
   - VSmartPrompt: **variables inside a variable's value are expanded**. `{lying on <ground>}==!<pose>` used to print `<ground>` literally when `<pose>` was referenced; the value is now expanded when it is printed, so the order of the assignments no longer matters (`<ground>` may be set later, e.g. inside a switcher block). Socket (`in1`-`in6`) and inherited `vars_in` values stay as-is, and a self or cyclic reference stays literal instead of looping. Existing prompts resolve unchanged
 - v1.20.6

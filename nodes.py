@@ -7,9 +7,12 @@ from pathlib import Path
 from aiohttp import web
 from server import PromptServer
 
+from .vpaths import contained, safe_join, wildcard_roots
+
 
 WILDCARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wildcards')
 LEGACY_WILDCARD_DIR_SUFFIX = "/comfyui-richtext_basicdynamicprompts/wildcards"
+DRIVE_LETTER_PATTERN = re.compile(r'^[A-Za-z]:')
 LORA_PATTERN = re.compile(
     r'<(?:lora|lora_a|lora_b|lora_visual|lora_a_visual|lora_b_visual|lora_audio|lora_a_audio|lora_b_audio):[^>\n\r]+>',
     re.IGNORECASE,
@@ -118,6 +121,28 @@ def normalize_wildcard_directory(wildcard_dir: str | None) -> str:
     return normalized
 
 
+def confine_wildcard_directory(wildcard_dir: str | None, warn: bool = False) -> str:
+    """The wildcard directory actually used for a widget or request value.
+    '' stays '' (wildcards off); a relative value is taken inside WILDCARD_DIR; an
+    absolute one must lie inside a wildcard root (vpaths). Anything else falls back
+    to WILDCARD_DIR - also what a workflow from another machine needs, since it
+    carries the author's absolute install path."""
+    normalized = normalize_wildcard_directory(wildcard_dir)
+    if not normalized:
+        return ""
+    expanded = os.path.expanduser(normalized)
+    if os.path.isabs(expanded) or DRIVE_LETTER_PATTERN.match(expanded):
+        confined = contained(expanded, wildcard_roots(WILDCARD_DIR))
+    else:
+        confined = safe_join(WILDCARD_DIR, expanded)
+    if confined is None:
+        if warn:
+            print(f"[VSmartPrompt] wildcard_directory '{normalized}' is outside the allowed folders, using {WILDCARD_DIR} "
+                  f"(add it to 'wildcard_dirs' in allowed_folders.json to allow it)")
+        return os.path.realpath(WILDCARD_DIR)
+    return confined
+
+
 def resolve_wildcard_file_path(wildcard_dir: str, wildcard_name: str) -> str | None:
     wildcard_dir = normalize_wildcard_directory(wildcard_dir)
     if not wildcard_dir:
@@ -159,17 +184,11 @@ def resolve_wildcard_file_path(wildcard_dir: str, wildcard_name: str) -> str | N
     except OSError:
         return None
 
-    resolved_base = wildcard_path.resolve()
     for entry in entries:
         base_name, ext = os.path.splitext(entry)
         if ext.lower() == ".txt" and base_name.lower() == target_file.lower():
-            candidate = os.path.join(current_dir, entry)
-            try:
-                if not Path(candidate).resolve().is_relative_to(resolved_base):
-                    return None
-            except (OSError, ValueError):
-                return None
-            return candidate
+            # a symlinked file or subfolder must not lead out of the directory
+            return contained(os.path.join(current_dir, entry), [wildcard_dir])
 
     return None
 
@@ -306,7 +325,7 @@ def dynamic_prompts(
     return_trace: bool = False,
     preset_variables: dict[str, str] | None = None) -> str | tuple[str, list[list[int]], list[dict[str, str | int]]]:
 
-    wildcard_dir = normalize_wildcard_directory(wildcard_dir)
+    wildcard_dir = confine_wildcard_directory(wildcard_dir)
     # Read once, before anything touches the text: the directive is a comment
     # and comment stripping runs further down.
     mode = detect_prompt_mode(prompt)
@@ -1656,7 +1675,7 @@ wildcard_directory: The directory where TXT wildcard files are stored.
         # The three cleanup switches used to be forced on here, which made the widgets
         # decorative. They are honoured again: multi-line combinations resolve exactly
         # the same either way, so nothing about the random machinery depends on them.
-        wildcard_directory = normalize_wildcard_directory(wildcard_directory)
+        wildcard_directory = confine_wildcard_directory(wildcard_directory, warn=True)
 
         # Variables handed over by an upstream VSmartPrompt through 'vars_in'. They
         # act like assignments that already happened, so this prompt can reference
@@ -1724,7 +1743,7 @@ async def get_wildcard_files(request):
         data = await request.json()
     except Exception:
         return web.json_response({"wildcard_files": [], "wildcard_directory": ""}, status=400)
-    current_wildcard_dir = normalize_wildcard_directory(data.get("current_wildcard_dir", ""))
+    current_wildcard_dir = confine_wildcard_directory(data.get("current_wildcard_dir", ""))
     if not current_wildcard_dir:
         return web.json_response({"wildcard_files": [], "wildcard_directory": current_wildcard_dir})
     
@@ -1757,7 +1776,7 @@ async def validate_wildcards(request):
         data = await request.json()
     except Exception:
         return web.json_response({"existing_wildcards": []}, status=400)
-    current_wildcard_dir = normalize_wildcard_directory(data.get("current_wildcard_dir", ""))
+    current_wildcard_dir = confine_wildcard_directory(data.get("current_wildcard_dir", ""))
     wildcard_names = data.get("wildcard_names", [])
 
     existing_wildcards = []
@@ -1782,31 +1801,31 @@ async def validate_wildcards(request):
 
 def _resolve_editable_wildcard_path(data) -> tuple[str | None, str | None]:
     """
-    Validates a wildcard file path coming from the browser.
-    Returns (absolute_path, None) or (None, error_message). Only '.txt' files inside
-    the node's wildcard directory are ever accepted.
+    Validates a wildcard file coming from the browser's built-in editor.
+    Returns (absolute_path, None) or (None, error_message). 'file_name' is relative
+    to the node's (confined) wildcard directory - subfolders allowed, absolute paths
+    and '..' rejected - and only '.txt' files are ever accepted.
     """
-    file_path = data.get("file_path")
-    if not isinstance(file_path, str) or not file_path.strip():
-        return None, "No wildcard file path provided"
+    file_name = data.get("file_name")
+    if not isinstance(file_name, str) or not file_name.strip():
+        return None, "No wildcard file name provided"
+    file_name = file_name.strip()
+    if not file_name.lower().endswith(".txt"):
+        file_name += ".txt"
 
-    file_path = os.path.normpath(file_path.replace("\\", os.sep).replace("/", os.sep))
-    if not file_path.lower().endswith(".txt"):
-        return None, "Only .txt files can be edited"
-
-    wildcard_dir = normalize_wildcard_directory(data.get("wildcard_dir") or "")
+    wildcard_dir = confine_wildcard_directory(data.get("wildcard_dir") or "")
     if not wildcard_dir:
         return None, "No wildcard directory configured"
 
-    try:
-        resolved_dir = Path(wildcard_dir).resolve()
-        resolved_file = Path(file_path).resolve()
-        if not resolved_file.is_relative_to(resolved_dir):
-            return None, "Access denied: path outside wildcard directory"
-    except (OSError, ValueError):
-        return None, "Invalid file path"
+    # An existing file wins with its on-disk spelling (lookup is case-insensitive)
+    existing = resolve_wildcard_file_path(wildcard_dir, file_name)
+    if existing:
+        return os.path.realpath(existing), None
 
-    return str(resolved_file), None
+    target = safe_join(wildcard_dir, file_name)
+    if target is None:
+        return None, "Access denied: path outside wildcard directory"
+    return target, None
 
 
 @PromptServer.instance.routes.post("/valitools/read_wildcard")
